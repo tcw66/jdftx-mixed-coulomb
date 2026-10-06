@@ -39,7 +39,8 @@ public:
 	SymmetryMode mode; //!< Symmetry mode (none, automatic or manual)
 
 	Symmetries();
-	void setup(const Everything& everything); //!< Phase 1 of setup which computes/checks lattice+basis symmetries
+	void setup(const Everything& everything); //!< Phase 1: detect symmetry and make atom positions exactly symmetric
+	void setup(const Everything& everything, bool symmetrizeAtoms); //!< Detect symmetry without changing geometry when symmetrizeAtoms is false
 	void setupMesh(); //!< Phase 2 of setup which computes / checks FFTbox and k-mesh dependent symmetries
 	
 	//! Reduce a k-point mesh (and remember its inversion symmetry property in kpointInvertList)
@@ -61,6 +62,7 @@ public:
 	const std::vector<int>& getKpointInvertList() const; //!< direct access to inversion property of symmetry group (see kpointInvertList)
 	const std::vector<std::vector<std::vector<int> > >& getAtomMap() const; //!< direct access to mapping of each atom under each symmetry matrix (index order species, atom, symmetry)
 	void printKmap(FILE* fp) const; //!< print the k-point map (cached in kmap)
+	void getKpointMap(size_t destination,size_t& source,int& invert,int& iSym) const; //!< unpack cached full-to-reduced map
 	
 	static matrix getSpinorRotation(const matrix3<>& rot); //calculate spinor rotation from Cartesian rotation matrix
 private:
@@ -98,7 +100,7 @@ private:
 	
 	//Atom maps:
 	std::vector<std::vector<std::vector<int> > > atomMap;
-	void initAtomMaps();
+	void initAtomMaps(bool symmetrizeAtoms=true);
 	
 	//Supercell handling (for phonon):
 	vector3<int> sup; //!< this is an exact supercell of some unit cell with this count and restrict space group to translations within that unit cell

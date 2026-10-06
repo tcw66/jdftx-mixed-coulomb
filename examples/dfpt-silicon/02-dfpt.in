@@ -1,0 +1,16 @@
+include common.in
+
+# Reads scf.wfns and scf.fillings. The runner verifies they exist and match.
+initial-state scf.$VAR
+
+# Polish the SCF orbitals variationally before the response calculation.
+# Offset occupied states at k+q and k-q are generated automatically.
+electronic-minimize nIterations 500 energyDiffThreshold 1e-13
+perturb-minimize nIterations 500 algorithm MINRES \
+    residualTol 1e-7 residualDiffThreshold 0
+phonon-dfpt 2 2 2
+phonon-dfpt-symmetries yes
+
+dump-name phonon.$VAR
+# phonon-dfpt writes its phonon matrices automatically.
+dump End None

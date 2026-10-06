@@ -1,0 +1,7 @@
+# Diamond silicon: primitive fcc cell, lattice parameter in bohr.
+# 10.26 bohr is a reference value, not a PBE equilibrium-lattice calculation.
+lattice face-centered Cubic 10.26
+coords-type lattice
+ion-species /home/tyler/apps/build_9-13-2026/pseudopotentials/SG15/Si_ONCV_PBE.upf
+ion Si 0 0 0 1
+ion Si 0.25 0.25 0.25 1

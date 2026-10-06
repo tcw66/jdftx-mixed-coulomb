@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+"""Interpolate JDFTx phonon lattice-space matrices at arbitrary fractional q."""
+import argparse
+from pathlib import Path
+import numpy as np
+
+
+def read_text_array(path, dtype=float):
+    lines = [line for line in Path(path).read_text().splitlines()
+             if line.strip() and not line.lstrip().startswith('#')]
+    if not lines:
+        raise ValueError(f'no data in {path}')
+    return np.loadtxt(lines, dtype=dtype, ndmin=2)
+
+
+def load(prefix):
+    """Prefix ends before phononCellMap, e.g. 'Si.' for Si.phononCellMap."""
+    cells = read_text_array(prefix + 'phononCellMap')[:, :3]
+    basis = read_text_array(prefix + 'phononBasis', dtype=str)
+    n = len(basis)
+    raw = np.fromfile(prefix + 'phononOmegaSq', dtype="<f8")
+    if not n or raw.size != len(cells) * n * n:
+        raise ValueError('phononOmegaSq size does not match cell map and basis')
+    if not np.allclose(cells, np.rint(cells)):
+        raise ValueError('cell map contains noninteger lattice coordinates')
+    # matrix::write_real stores column-major data per cell.
+    matrices = raw.reshape(len(cells), n, n).transpose(0, 2, 1)
+    if not np.isfinite(matrices).all():
+        raise ValueError('nonfinite force constants')
+    return cells, matrices
+
+
+def interpolate(cells, matrices, qpoints):
+    qpoints = np.atleast_2d(qpoints)
+    if qpoints.shape[1] != 3 or not np.isfinite(qpoints).all():
+        raise ValueError('q points must have three finite coordinates')
+    phase = np.exp(2j * np.pi * qpoints @ cells.T)
+    result = np.einsum('qr,rij->qij', phase, matrices)
+    error = np.max(np.abs(result - result.conj().transpose(0, 2, 1)))
+    scale = max(1e-30, np.max(np.abs(result)))
+    if error > 1e-6 * scale:
+        raise ValueError(f'interpolated dynamical matrix is not Hermitian (relative error {error/scale:g})')
+    return 0.5 * (result + result.conj().transpose(0, 2, 1))
+
+
+def frequencies(matrices):
+    """Signed wavenumbers in cm^-1; negative values denote imaginary modes."""
+    eigs = np.linalg.eigvalsh(matrices)
+    return np.sign(eigs) * np.sqrt(np.abs(eigs)) * 219474.6313705
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('prefix', help='output prefix, e.g. Si.')
+    parser.add_argument('qpoints', type=Path, help='text file with three fractional reciprocal coordinates per row')
+    parser.add_argument('-o', '--output', type=Path, default=Path('phononFrequencies.dat'))
+    parser.add_argument('--matrices', type=Path, help='also save q points, dynamical matrices and eigenvectors to an NPZ file')
+    args = parser.parse_args()
+    try:
+        cells, force = load(args.prefix)
+        qs = read_text_array(args.qpoints)
+        dyn = interpolate(cells, force, qs)
+        np.savetxt(args.output, np.column_stack((qs, frequencies(dyn))),
+                   header='q0 q1 q2 frequencies[cm^-1]; negative denotes imaginary frequency')
+        if args.matrices:
+            eigenvalues, eigenvectors = np.linalg.eigh(dyn)
+            np.savez(args.matrices, qpoints=qs, dynamical_matrices=dyn,
+                     omega_squared=eigenvalues, eigenvectors=eigenvectors)
+    except (OSError, ValueError) as error:
+        parser.exit(1, f'phononDFPT: {error}\n')
+
+
+if __name__ == '__main__':
+    main()

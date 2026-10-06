@@ -170,7 +170,10 @@ void ElecInfo::setup(const Everything &everything, std::vector<diagMatrix>& F, E
 	}
 	
 	//Check that number of bands is sufficient:
-	int nBandsMin = (int)ceil(nElectrons/qWeightSum);
+	// Summing k-point weights on restart can put an integer occupation a few
+	// ulps above that integer. Do not require an extra band for roundoff.
+	double occupiedBands = nElectrons/qWeightSum;
+	int nBandsMin = (int)ceil(occupiedBands - 1e-12*std::max(1., fabs(occupiedBands)));
 	if(fillingsUpdate == FillingsHsub)
 	{	//make sure there are extra bands:
 		if(nBands*qWeightSum <= nElectrons)

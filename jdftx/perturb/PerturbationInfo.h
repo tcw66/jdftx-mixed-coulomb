@@ -104,6 +104,16 @@ public:
 	void sampleField (ScalarFieldTilde V, std::string name);
 
 	bool commensurate = true; //!< Is the perturbation lattice periodic
+	bool offsetStatesReady = false; //!< Reset when offset bases are allocated
+	bool groundStateReady = false; //!< Ground state has been minimized for the current response sequence
+	vector3<int> phononGrid; //!< Nonzero entries enable primitive-cell DFPT phonons
+	bool phononUseSymmetry = true; //!< Reduce q by space-group symmetry and time reversal
+	bool phononReduceDisplacements = true; //!< Reconstruct displacement responses using the little group of q
+	bool phononReuseOffsetStates = true; //!< Reuse existing occupied states when k +/- q lies on the k mesh
+	bool phononElectronPhonon = false; //!< Export screened Bloch Hamiltonian derivatives at every q and displacement
+	string phononInitialInput, phononInitialState; //!< Input and state pattern of a symmetry-reduced SCF restart
+	int phononQGroups = 1; //!< Independent MPI groups for representative q points
+	double lastResponseResidual = 0.; //!< Residual of the most recent completed response
 	bool testing = false; //!< Whether or not a FD test is being conducted
 	SolverParams solverParams; //!< solver parameters
 
@@ -143,28 +153,3 @@ public:
 };
 
 #endif /* PERTURB_PERTURBATIONINFO_H_ */
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

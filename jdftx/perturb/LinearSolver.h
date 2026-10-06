@@ -115,7 +115,7 @@ template<typename Vector> int LinearSolvableIndefinite<Vector>::CG(const Vector&
 	}
 	
 	//Check initial residual
-	double relErr = sqrt(fabs(rdotz)/fabs(rKr));
+	double relErr = rKr ? sqrt(fabs(rdotz)/fabs(rKr)) : sqrt(fabs(rdotz));
 	double relErrPrev = relErr;
 	fprintf(p.fpLog, "%sInitial:  ||r||_k/||b||_k: %12.6le\n", p.linePrefix, relErr); fflush(p.fpLog);
 	if(relErr<p.residualTol) { fprintf(p.fpLog, "%sConverged ||r||_k/||b||_k<%le\n", p.linePrefix, p.residualTol); fflush(p.fpLog); return 0; }
@@ -186,6 +186,7 @@ template<typename Vector> int LinearSolvableIndefinite<Vector>::MINRES(const Vec
 	
 	Ksqrt(r); hessian(r, r); r *= -1.0; axpy(-1.0, b, r); Ksqrt(r); //r = -Ksqrt.b - Ksqrt.A.Ksqrt.x
 	double rho=sqrt(dot(r,r));
+	if(!rho) return 0; // Exact initial solution, including a zero source.
 	Vector v = clone(r); v *= (1/rho);
 	double beta=0; double betatilde=0; double c=-1; double s=0;
 	Vector vold=clone(state); Vector w=clone(state); Vector wtt=clone(v);
@@ -213,12 +214,13 @@ template<typename Vector> int LinearSolvableIndefinite<Vector>::MINRES(const Vec
 		axpy(-alpha, v, vhat);
 		beta=sqrt(dot(vhat,vhat));
 		vold=clone(v);
-		v = clone(vhat); v *= (1/beta);
+		v = clone(vhat); if(beta) v *= (1/beta);
 		double l1=s*alpha-c*betatilde;
 		double l2=s*beta;
 		double alphatilde=-s*betatilde-c*alpha;
 		betatilde=c*beta;
 		double l0=sqrt(alphatilde*alphatilde+beta*beta);
+		if(!l0) break; // Lanczos breakdown: return the best finite iterate.
 		c=alphatilde/l0;
 		s=beta/l0;
 		wt=clone(wtt); axpy(-l1, w, wt);

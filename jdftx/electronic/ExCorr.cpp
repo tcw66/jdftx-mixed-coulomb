@@ -1070,6 +1070,7 @@ void ExCorr::get_dVxc(const ScalarFieldArray& n, ScalarFieldArray* dVxc, Include
 
 	if(needFiniteDifference_dVxc())
 	{	ScalarFieldArray nplusdn, Vxc, VxcplusdVxc;
+		if(!nrm2(dn[0])) { *dVxc = dVxcOut; return; }
 		double h = nrm2(n[0])/nrm2(dn[0]) * 1e-7;
 		nplusdn = n+h*dn;
 		(*this)(n, &Vxc, includeTXC, tauPtr, Vtau);

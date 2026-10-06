@@ -1,5 +1,10 @@
 /** \page EphMatrixElements Electron-phonon matrix elements
 
+For primitive-cell DFPT screened Bloch matrix elements, see
+\ref DFPTElectronPhonon. That export includes a converter to phonon-mode
+couplings in meV. The supercell and Wannier interpolation workflow below
+uses a different output format.
+
 \image html tutorials/SpectralFunctionResistivity.png
 
 We have so far calculated the phonon dispersion relation from the force matrix

@@ -125,7 +125,11 @@ MPIUtil::~MPIUtil()
 void MPIUtil::exit(int errCode) const
 {
 	#ifdef MPI_ENABLED
-	MPI_Abort(comm, errCode);
+	// An error in one independent subgroup must also stop ranks waiting in
+	// its parent, rather than leave them blocked at the final gather.
+	const MPIUtil* parent=this;
+	while(parent->procDivision) parent=parent->procDivision.mpiUtil;
+	MPI_Abort(parent->comm, errCode);
 	#else
 	::exit(errCode);
 	#endif

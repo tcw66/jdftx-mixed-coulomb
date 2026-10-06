@@ -1,0 +1,13 @@
+include system.in
+
+# Identical basis and electronic k mesh for SCF and DFPT restart.
+symmetries none
+coulomb-interaction periodic
+spintype no-spin
+elec-ex-corr gga-PBE
+elec-cutoff 30
+kpoint-folding 8 8 8
+
+# Eight valence electrons: four fully occupied scalar bands.
+# Do not add smearing or empty bands to this DFPT example.
+elec-n-bands 4

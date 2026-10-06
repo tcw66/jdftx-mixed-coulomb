@@ -481,6 +481,14 @@ void Phonon::forceMatrixGammaPrimeFix(std::vector<matrix>& F, const std::map<vec
 	for(int iDir=0; iDir<3; iDir++)
 		if(isTruncated[iDir])
 			alphaInv(iDir,iDir) = 1.; //handle singularity in truncated directions
+	double momentScale=0.;
+	for(int i=0;i<3;i++) for(int j=0;j<3;j++)
+		momentScale=std::max(momentScale,fabs(alphaInv(i,j)));
+	if(!std::isfinite(det(alphaInv)) || fabs(det(alphaInv))<=1e-12*std::pow(momentScale,3))
+	{
+		logPrintf("\tSkipping Gamma derivative correction: cell-map moments are singular; use a larger phonon supercell to resolve sound velocities.\n");
+		return;
+	}
 	matrix3<> alpha = inv(alphaInv);
 	std::vector<std::vector<vector3<>>> g(3, std::vector<vector3<>>(3)); //correction tensor
 	for(int iDir=0; iDir<3; iDir++)

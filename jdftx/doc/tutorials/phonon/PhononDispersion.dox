@@ -1,5 +1,7 @@
 /** \page PhononDispersion Phonon dispersion
 
+For primitive-cell density functional perturbation theory on a q mesh, see \ref DFPTPhonons.
+
 \image html tutorials/PhononDispersion.png
 
 This tutorial will introduce the calculation of phonon dispersion

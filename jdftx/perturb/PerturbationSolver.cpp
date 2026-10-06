@@ -22,6 +22,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include <electronic/Everything.h>
 #include <electronic/ElecMinimizer.h>
 #include <electronic/ColumnBundle.h>
+#include <electronic/ColumnBundleTransform.h>
 #include <electronic/ExCorr.h>
 #include <core/matrix.h>
 #include <core/Units.h>
@@ -126,13 +127,13 @@ void PerturbationSolver::solvePerturbation()
 	}
 
 	if (!pInfo.solverParams.nIterations)
-		die("Error: Must specify nIterations in command solve-perturbation to enable the variational perturbation solver.\n")
+		die("Error: Must specify nIterations in command perturb-minimize to enable the variational perturbation solver.\n")
 	
 	logPrintf("Variational perturbation solver is starting.\n");
 	
 	if (pInfo.datom) {
 		AtomicMode m = pInfo.datom->mode;
-		if (m.sp < 0 || m.sp >= iInfo.species.size() || m.at < 0 || m.at >= iInfo.species[m.sp]->atpos.size())
+		if (m.sp >= iInfo.species.size() || m.at >= iInfo.species[m.sp]->atpos.size())
 			die("Perturbed atom does not exist! Check species and atom number.\n");
 		logPrintf("Perturbing species %d atom %d in direction %g %g %g.\n", m.sp, m.at, m.dirCartesian[0], m.dirCartesian[1], m.dirCartesian[2]);
 	}
@@ -140,11 +141,20 @@ void PerturbationSolver::solvePerturbation()
 	if (pInfo.dVext)
 		logPrintf("Perturbing Vexternal.\n");
 	
-	if(pInfo.commensurate && e.eVars.wfnsFilename.empty() && !e.eVars.skipWfnsInit) {
+	if(!pInfo.groundStateReady && e.eVars.wfnsFilename.empty() && !e.eVars.skipWfnsInit) {
 		logPrintf("No input wavefunctions given. Performing electronic structure calculation first.\n");
 		elecFluidMinimize(e);
 	}
 	
+	// The phonon driver has already built the ground-state density, potential
+	// and subspace Hamiltonians. Responses only modify dC/Cinc, not eVars.C.
+	if(!pInfo.phononGrid.isNonzero() || !pInfo.groundStateReady)
+		eVars.elecEnergyAndGrad(e.ener, nullptr, nullptr, true);
+	pInfo.groundStateReady = true;
+	if(!pInfo.commensurate && pInfo.wfnsFilename.empty() && !pInfo.offsetStatesReady)
+	{ computeIncommensurateWfns(); pInfo.offsetStatesReady=true; }
+	if(metallic() && !metallicReady) setupMetallicResponse();
+
 	state.init(e);
 	if (pInfo.commensurate) {
 		init(state.X, eInfo.nStates, eInfo.nBands, &e.basis[0], &eInfo);
@@ -158,7 +168,7 @@ void PerturbationSolver::solvePerturbation()
 		}
 	}
 	
-	eVars.elecEnergyAndGrad(e.ener, nullptr, nullptr, true);
+	if(!pInfo.phononGrid.isNonzero()) eVars.elecEnergyAndGrad(e.ener, nullptr, nullptr, true);
 
 	updateExcorrCache();
 	updateHC();
@@ -169,12 +179,195 @@ void PerturbationSolver::solvePerturbation()
 	
 	calcdGradTau();
 	
-	solve(pInfo.dGradTau, pInfo.solverParams);
+	SolverParams responseParams=pInfo.solverParams;
+	// The band-space and plane-wave blocks have different energy scales;
+	// leave margin between the preconditioned and verified Euclidean residual.
+	if(metallic()) responseParams.residualTol*=0.05;
+	solve(pInfo.dGradTau, responseParams);
 	
 	hessian(pInfo.dGradPsi, state);
+	if(metallic() && pInfo.qvec.length_squared()<1e-20) {
+		complex charge(integral(Real(pInfo.dnpq[0])),integral(Imag(pInfo.dnpq[0])));
+		complex shift=0.;
+		for(int k=eInfo.qStart;k<eInfo.qStop;k++) {
+			ColumnBundle bare=pInfo.Cinc[k].similar(), induced=bare.similar();
+			bare.zero(); induced.zero();
+			dHtau(*pInfo.Cinc[k].qnum,bare,eVars.C[k],1);
+			dHpsi(*pInfo.Cinc[k].qnum,induced,eVars.C[k],pInfo.dVsclocpq);
+			matrix dH=eVars.C[k]^(bare+induced);
+			for(int n=0;n<eInfo.nBands;n++)
+				shift-=eInfo.qnums[k].weight*eInfo.smearPrime(metallicMu,eVars.Hsub_eigs[k][n])*dH(n,n);
+		}
+		mpiWorld->allReduce(shift,MPIUtil::ReduceSum);
+		if(metallicDOS>1e-30) shift*=1./metallicDOS;
+		logPrintf("Metallic DFPT Gamma charge response: %.6le; Fermi-level shift [Hartree/bohr]: %.6le %+.6lei\n",charge.abs(),shift.real(),shift.imag());
+	}
+	PerturbationGradient residual = clone(pInfo.dGradPsi);
+	axpy(1.,pInfo.dGradTau,residual);
+	double bnorm = dot(pInfo.dGradTau,pInfo.dGradTau);
+	double rnorm = dot(residual,residual);
+	pInfo.lastResponseResidual=bnorm ? sqrt(rnorm/bnorm) : sqrt(rnorm);
+	logPrintf("DFPT final relative residual: %.6le\n",bnorm ? sqrt(rnorm/bnorm) : sqrt(rnorm));
+	if(pInfo.phononGrid.isNonzero() && (!std::isfinite(rnorm) || rnorm > std::pow(10*pInfo.solverParams.residualTol,2)*bnorm))
+		die("DFPT phonon response did not converge; increase perturb-minimize nIterations or tighten the ground-state solve.\n");
+}
+
+// Eq. (70) of Baroni et al.: the divided difference of occupations is
+// the density-matrix susceptibility, including its finite degenerate limit.
+// Square-root weights make its coupling to the XC/Hartree kernel Hermitian.
+// The energy-ordering smearing partitions each pair between its two sources.
+// It approaches 1 for upward transitions, 0 for downward transitions and 1/2
+// at degeneracy. A uniform half weight would depend on which empty bands
+// happen to be included in the target projector, and fails off the k mesh.
+bool PerturbationSolver::metallic() const
+{ return pInfo.phononGrid.isNonzero() && eInfo.fillingsUpdate==ElecInfo::FillingsHsub; }
+
+void PerturbationSolver::setupMetallicResponse()
+{
+	double Bz=0.;
+	metallicMu=eInfo.findMu(eVars.Hsub_eigs,eInfo.nElectrons,Bz);
+	metallicWeights.resize(2*eInfo.nStates);
+	metallicEnergies.resize(2*eInfo.nStates);
+	metallicSqrtF.resize(eInfo.nStates);
+	double tail=0.;
+	metallicDOS=0.;
+	for(int k=eInfo.qStart;k<eInfo.qStop;k++) {
+		metallicSqrtF[k]=eVars.F[k];
+		for(double& f:metallicSqrtF[k]) f=sqrt(std::max(0.,f));
+		for(int sign=0;sign<2;sign++) {
+			int index=k+sign*eInfo.nStates;
+			ColumnBundle& C=pInfo.Cinc[index];
+			ColumnBundle HC;
+			applyH(*C.qnum,eye(eInfo.nBands),HC,C);
+			matrix U;
+			dagger_symmetrize(C^HC).diagonalize(U,metallicEnergies[index]);
+			C=C*U;
+			const diagMatrix& eps=metallicEnergies[index];
+			tail=std::max(tail,eInfo.smear(metallicMu,eps.back()));
+			matrix W(eInfo.nBands,eInfo.nBands);
+			for(int n=0;n<eInfo.nBands;n++) for(int m=0;m<eInfo.nBands;m++) {
+				double en=eVars.Hsub_eigs[k][n], em=eps[m];
+				double diff=en-em;
+				double divided=(fabs(diff)<1e-7*eInfo.smearingWidth)
+					? eInfo.smearPrime(metallicMu,0.5*(en+em))
+					: (eInfo.smear(metallicMu,en)-eInfo.smear(metallicMu,em))/diff;
+				W.set(m,n,sqrt(std::max(0.,-divided*eInfo.smear(0.,diff))));
+			}
+			metallicWeights[index]=W;
+		}
+		for(double eps:eVars.Hsub_eigs[k])
+			metallicDOS-=eInfo.qnums[k].weight*eInfo.smearPrime(metallicMu,eps);
+	}
+	mpiWorld->allReduce(tail,MPIUtil::ReduceMax);
+	mpiWorld->allReduce(metallicDOS,MPIUtil::ReduceSum);
+	if(tail>1e-6) die("Metallic DFPT offset states need more empty bands: highest-band occupation exceeds 1e-6. Increase elec-n-bands.\n");
+	logPrintf("Metallic DFPT: Fermi energy %.12g Hartree, DOS %.6le electrons/Hartree.\n",metallicMu,metallicDOS);
+	metallicReady=true;
+}
+
+namespace {
+// Elementwise multiplication, kept in small band-space matrices. Accessing
+// data() synchronizes these matrices correctly in both CPU and GPU builds.
+matrix metallicHadamard(const matrix& a,const matrix& b)
+{
+	matrix result(a.nRows(),a.nCols());
+	const complex* ad=a.data(); const complex* bd=b.data();
+	complex* rd=result.data();
+	for(int i=0;i<a.nRows()*a.nCols();i++) rd[i]=ad[i]*bd[i];
+	return result;
+}
+}
+
+void PerturbationSolver::metallicProject(std::vector<ColumnBundle>& X) const
+{
+	if(pInfo.qvec.length_squared()>1e-20) return;
+	// Constrain the Gamma response to zero total charge (Eq. 75). In this
+	// square-root representation this is an orthogonal projection along the
+	// DOS vector, equivalent to the self-consistent Fermi-energy shift.
+	// Use overlaps rather than assuming a gauge within degenerate subspaces.
+	for(int sign=0;sign<2;sign++) {
+		complex charge=0.; double norm=0.;
+		for(int k=eInfo.qStart;k<eInfo.qStop;k++) {
+			int index=k+sign*eInfo.nStates;
+			const ColumnBundle& C=pInfo.Cinc[index];
+			matrix t=metallicHadamard(metallicWeights[index],C^O(eVars.C[k]));
+			charge+=eInfo.qnums[k].weight*trace(dagger(t)*(C^O(X[index])));
+			norm+=eInfo.qnums[k].weight*std::pow(nrm2(t),2);
+		}
+		mpiWorld->allReduce(charge,MPIUtil::ReduceSum);
+		mpiWorld->allReduce(norm,MPIUtil::ReduceSum);
+		if(norm<=1e-30) continue; // zero DOS: insulating limit
+		for(int k=eInfo.qStart;k<eInfo.qStop;k++) {
+			int index=k+sign*eInfo.nStates;
+			const ColumnBundle& C=pInfo.Cinc[index];
+			matrix t=metallicHadamard(metallicWeights[index],C^O(eVars.C[k]));
+			X[index]-=C*(t*(charge/norm));
+		}
+	}
+}
+
+ColumnBundle PerturbationSolver::metallicMap(const ColumnBundle& X,int k,int sign) const
+{
+	int index=k+sign*eInfo.nStates;
+	const ColumnBundle& C=pInfo.Cinc[index];
+	matrix low=C^O(X);
+	ColumnBundle high=X;
+	high-=C*low;
+	ColumnBundle result=high*metallicSqrtF[k];
+	result+=C*metallicHadamard(metallicWeights[index],low);
+	return result;
+}
+
+void PerturbationSolver::metallicHessian(PerturbationGradient& Av,const PerturbationGradient& v)
+{
+	std::vector<ColumnBundle> projected=v.X, response(2*eInfo.nStates);
+	metallicProject(projected);
+	for(int k=eInfo.qStart;k<eInfo.qStop;k++) for(int sign=0;sign<2;sign++) {
+		int index=k+sign*eInfo.nStates;
+		response[index]=metallicMap(projected[index],k,sign);
+	}
+	getdnInc(&response,nullptr,pInfo.dnpq,pInfo.dnmq);
+	getdVsclocPsi(pInfo.dnpq,pInfo.dVsclocpq,&pInfo.qvec);
+	pInfo.dVsclocmq=conj(pInfo.dVsclocpq);
+	std::vector<ColumnBundle> induced(2*eInfo.nStates), kinetic(2*eInfo.nStates);
+	for(int k=eInfo.qStart;k<eInfo.qStop;k++) for(int sign=0;sign<2;sign++) {
+		int index=k+sign*eInfo.nStates;
+		const ColumnBundle& C=pInfo.Cinc[index];
+		// Preserve the variational amplitudes for force-matrix contractions.
+		pInfo.dC[index]=v.X[index];
+		ColumnBundle low=C*(C^O(v.X[index])), high=v.X[index]-low;
+		ColumnBundle Hhigh;
+		applyH(*C.qnum,eye(eInfo.nBands),Hhigh,high);
+		Hhigh-=O(high)*eVars.Hsub_eigs[k];
+		Hhigh-=C*(C^O(Hhigh));
+		kinetic[index]=Hhigh+O(low);
+		ColumnBundle dHC=C.similar(); dHC.zero();
+		dHpsi(*C.qnum,dHC,eVars.C[k],sign ? pInfo.dVsclocmq : pInfo.dVsclocpq);
+		induced[index]=metallicMap(dHC,k,sign);
+	}
+	metallicProject(induced);
+	Av.init(e);
+	for(int k=eInfo.qStart;k<eInfo.qStop;k++) for(int sign=0;sign<2;sign++) {
+		int index=k+sign*eInfo.nStates;
+		Av.X[index]=(kinetic[index]+induced[index])*eInfo.qnums[k].weight;
+	}
+}
+
+void PerturbationSolver::metallicSource()
+{
+	for(int k=eInfo.qStart;k<eInfo.qStop;k++) for(int sign=0;sign<2;sign++) {
+		int index=k+sign*eInfo.nStates;
+		ColumnBundle dHC=pInfo.Cinc[index].similar(); dHC.zero();
+		dHtau(*pInfo.Cinc[index].qnum,dHC,eVars.C[k],sign ? -1 : 1);
+		pInfo.dGradTau.X[index]=metallicMap(dHC,k,sign);
+	}
+	metallicProject(pInfo.dGradTau.X);
+	for(int k=eInfo.qStart;k<eInfo.qStop;k++) for(int sign=0;sign<2;sign++)
+		pInfo.dGradTau.X[k+sign*eInfo.nStates]*=eInfo.qnums[k].weight;
 }
 
 void PerturbationSolver::precondition(PerturbationGradient& v) {
+	if(metallic()) { Ksqrt(v); Ksqrt(v); return; }
 	//Apply inverse kinetic preconditioner
 	for(int q=eInfo.qStart; q<eInfo.qStop; q++) {
 		precond_inv_kinetic(v.X[q], 1);
@@ -183,6 +376,18 @@ void PerturbationSolver::precondition(PerturbationGradient& v) {
 }
 
 void PerturbationSolver::Ksqrt(PerturbationGradient& v) {
+	if(metallic()) {
+		for(int k=eInfo.qStart;k<eInfo.qStop;k++) for(int sign=0;sign<2;sign++) {
+			int index=k+sign*eInfo.nStates;
+			const ColumnBundle& C=pInfo.Cinc[index];
+			ColumnBundle low=C*(C^O(v.X[index]));
+			v.X[index]-=low;
+			precond_inv_kinetic(v.X[index],1,true);
+			v.X[index]-=C*(C^O(v.X[index]));
+			v.X[index]+=low;
+		}
+		return;
+	}
 	//Apply inverse kinetic preconditioner
 	for(int q=eInfo.qStart; q<eInfo.qStop; q++) {
 		precond_inv_kinetic(v.X[q], 1, true);
@@ -191,6 +396,7 @@ void PerturbationSolver::Ksqrt(PerturbationGradient& v) {
 }
 
 void PerturbationSolver::hessian(PerturbationGradient& Av, const PerturbationGradient& v) {
+	if(metallic()) { metallicHessian(Av,v); return; }
 	static StopWatch watch("dGradPsi"); watch.start();
 	Av.init(e);
 	
@@ -288,6 +494,7 @@ void PerturbationSolver::hessian(PerturbationGradient& Av, const PerturbationGra
 }
 
 void PerturbationSolver::calcdGradTau() {
+	if(metallic()) { metallicSource(); return; }
 	static StopWatch watch("dGradTau"); watch.start();
 	if (pInfo.commensurate) {
 		
@@ -409,10 +616,222 @@ void PerturbationSolver::getGrad(std::vector<ColumnBundle> *grad, std::vector<Co
 	}
 }
 
+// Fixed-potential eigensolver: keeps primitive-cell states and density untouched.
+namespace {
+class OffsetBandMinimizer : public Minimizable<ColumnBundle>
+{
+	PerturbationSolver& solver;
+	ColumnBundle& C;
+public:
+	OffsetBandMinimizer(PerturbationSolver& solver, ColumnBundle& C) : solver(solver), C(C) {}
+	void step(const ColumnBundle& dir, double alpha) override
+	{ C += alpha*dir; C = C*invsqrt(C^O(C)); }
+	void constrain(ColumnBundle& dir) override { dir -= C*(C^O(dir)); }
+	double compute(ColumnBundle* grad, ColumnBundle* Kgrad) override
+	{
+		ColumnBundle HC;
+		solver.applyH(*C.qnum, eye(C.nCols()), HC, C);
+		matrix Hsub = C^HC;
+		if(grad)
+		{
+			*grad = HC;
+			*grad -= O(C)*Hsub;
+			if(Kgrad) { *Kgrad = *grad; precond_inv_kinetic(*Kgrad, 1.); }
+		}
+		return real(trace(Hsub));
+	}
+};
+
+// Rank-revealing orthonormalization of trial vectors. Residuals can become
+// linearly dependent at degeneracies, so a full inverse square root is unsafe.
+ColumnBundle orthonormalOffset(const ColumnBundle& trial)
+{
+	matrix vectors;
+	diagMatrix norms;
+	dagger_symmetrize(trial^O(trial)).diagonalize(vectors,norms);
+	int first=0;
+	double cutoff=std::max(1e-14,1e-12*norms.back());
+	while(first<int(norms.size()) && norms[first]<=cutoff) first++;
+	if(first==int(norms.size())) return ColumnBundle();
+	diagMatrix scale=norms(first,norms.size());
+	for(double& value:scale) value=1./sqrt(value);
+	return trial*(vectors(0,vectors.nRows(),first,vectors.nCols())*scale);
+}
+
+// A restarted block Davidson solve avoids the nonlinear line-search failures
+// of CG for offset states far from the original k point. Extra random trial
+// vectors also allow entry into symmetry sectors absent from the initial guess.
+double minimizeOffsetDavidson(PerturbationSolver& solver, ColumnBundle& occupied, int nIterations)
+{
+	int nOccupied=occupied.nCols();
+	int nKeep=std::min(int(occupied.basis->nbasis),nOccupied+std::max(2,nOccupied/2));
+	ColumnBundle C=occupied.similar(nKeep);
+	C.setSub(0,occupied);
+	C.randomize(nOccupied,nKeep);
+	C=orthonormalOffset(C);
+	double residual=INFINITY;
+	for(int iter=0;iter<=nIterations;iter++) {
+		ColumnBundle HC;
+		solver.applyH(*C.qnum,eye(C.nCols()),HC,C);
+		matrix vectors;
+		diagMatrix eigs;
+		dagger_symmetrize(C^HC).diagonalize(vectors,eigs);
+		C=C*vectors; HC=HC*vectors;
+		ColumnBundle R=HC-O(C)*eigs;
+		diagMatrix rNorm=diagDot(R,R);
+		residual=0.;
+		for(int b=0;b<nOccupied;b++) {
+			double value=sqrt(std::max(0.,rNorm[b])/C.basis->gInfo->detR);
+			if(!std::isfinite(rNorm[b])) {residual=INFINITY; break;}
+			residual=std::max(residual,value);
+		}
+		if(residual<1e-7 || !std::isfinite(residual) || iter==nIterations) break;
+		diagMatrix KEref=(-0.5)*diagDot(C,L(C));
+		precond_inv_kinetic_band(R,KEref);
+		// Reorthogonalize twice before selecting independent search directions.
+		for(int pass=0;pass<2;pass++) R-=C*(C^O(R));
+		R=orthonormalOffset(R);
+		if(!R) break;
+		ColumnBundle HR;
+		solver.applyH(*R.qnum,eye(R.nCols()),HR,R);
+		int nc=C.nCols(),nr=R.nCols();
+		matrix H=zeroes(nc+nr,nc+nr),cross=C^HR;
+		H.set(0,nc,0,nc,eigs);
+		H.set(0,nc,nc,nc+nr,cross);
+		H.set(nc,nc+nr,0,nc,dagger(cross));
+		H.set(nc,nc+nr,nc,nc+nr,R^HR);
+		dagger_symmetrize(H).diagonalize(vectors,eigs);
+		int next=std::min(nKeep,nc+nr);
+		C=C*vectors(0,nc,0,next)+R*vectors(nc,nc+nr,0,next);
+	}
+	occupied=C.getSub(0,nOccupied);
+	return residual;
+}
+}
+
+void PerturbationSolver::computeMetallicGroundStates()
+{
+	// An energy minimization barely constrains exponentially empty bands.
+	// Their eigenvalues and wavefunctions still enter the divided differences,
+	// so converge the entire stored subspace in the frozen SCF Hamiltonian.
+	logPrintf("Converging metallic DFPT source bands, including empty states.\n");
+	double residual=0.;
+	for(int k=eInfo.qStart;k<eInfo.qStop;k++) {
+		double current=minimizeOffsetDavidson(*this,eVars.C[k],std::max(200,e.elecMinParams.nIterations));
+		residual=std::max(residual,std::isfinite(current) ? current : INFINITY);
+		iInfo.project(eVars.C[k],eVars.VdagC[k]);
+	}
+	mpiWorld->allReduce(residual,MPIUtil::ReduceMax);
+	logPrintf("Metallic source-state maximum residual [Hartree]: %.6le\n",residual);
+	if(!std::isfinite(residual) || residual>1e-6)
+		die("Metallic DFPT source bands did not converge; increase electronic-minimize nIterations.\n");
+	eVars.elecEnergyAndGrad(e.ener,nullptr,nullptr,true);
+}
+
 void PerturbationSolver::computeIncommensurateWfns()
 {
-	die("Feature has not been implemented yet\n");
-	//TODO: Implement
+	logPrintf("Computing occupied states at k+q and k-q in the ground-state potential.\n");
+	MinimizeParams params = e.elecMinParams;
+	params.fpLog = nullLog;
+	params.nIterations = std::max(200, params.nIterations);
+	params.energyDiffThreshold = params.energyDiffThreshold > 0 ? std::min(1e-13,params.energyDiffThreshold) : 1e-13;
+	params.knormThreshold = 0.;
+	params.fdTest = false;
+	std::vector<int> reused(2*eInfo.nStates,-1);
+	if(pInfo.phononGrid.isNonzero() && pInfo.phononReuseOffsetStates) {
+		for(int sign=0;sign<2;sign++) for(int k=0;k<eInfo.nStates;k++) {
+			const vector3<>& target=sign ? pInfo.kminusq_vectors[k].k : pInfo.kplusq_vectors[k].k;
+			for(int source=0;source<eInfo.nStates;source++) {
+				vector3<> delta=target-eInfo.qnums[source].k;
+				for(int d=0;d<3;d++) delta[d]-=round(delta[d]);
+				if(delta.length_squared()<1e-16) {reused[k+sign*eInfo.nStates]=source; break;}
+			}
+		}
+		// Broadcast one source at a time, keeping memory bounded and allowing
+		// source and destination k points to belong to different MPI ranks.
+		for(int source=0;source<eInfo.nStates;source++) {
+			if(std::find(reused.begin(),reused.end(),source)==reused.end()) continue;
+			ColumnBundle received;
+			ColumnBundle& Csource=eInfo.isMine(source) ? eVars.C[source] : received;
+			if(!eInfo.isMine(source)) Csource.init(eInfo.nBands,e.basis[source].nbasis,&e.basis[source],&eInfo.qnums[source],isGpuEnabled());
+			if(mpiWorld->nProcesses()>1) mpiWorld->bcastData(Csource,eInfo.whose(source));
+			for(int sign=0;sign<2;sign++) for(int k=eInfo.qStart;k<eInfo.qStop;k++) {
+				int index=k+sign*eInfo.nStates;
+				if(reused[index]!=source) continue;
+				ColumnBundle& target=pInfo.Cinc[index];
+				target.zero();
+				ColumnBundleTransform::BasisWrapper wrapper(*target.basis);
+				ColumnBundleTransform(eInfo.qnums[source].k,e.basis[source],target.qnum->k,wrapper,
+					1,SpaceGroupOp(),1).scatterAxpy(1.,Csource,target,0,1);
+			}
+		}
+	}
+	double maxResidual = 0.;
+	int nRetries=0,nReused=0,nRefined=0;
+	for(int q=eInfo.qStart; q<eInfo.qStop; q++)
+	for(int sign=0; sign<2; sign++)
+	{
+		ColumnBundle& C = pInfo.Cinc[q+sign*eInfo.nStates];
+		bool reuse=reused[q+sign*eInfo.nStates]>=0;
+		if(!reuse) // Transfer periodic parts into an off-mesh basis.
+			for(int b=0; b<C.nCols(); b++) C.setColumn(b,0,eVars.C[q].getColumn(b,0));
+		C = C*invsqrt(C^O(C));
+		OffsetBandMinimizer minimizer(*this,C);
+		ColumnBundle grad;
+		minimizer.compute(&grad,nullptr);
+		double residual=sqrt(dotc(grad,grad).real()/(C.basis->gInfo->detR*C.nCols()));
+		if(reuse) nReused++;
+		if(!reuse || !std::isfinite(residual) || residual>1e-6) {
+			if(reuse) nRefined++;
+			minimizer.minimize(params);
+			minimizer.compute(&grad,nullptr);
+			residual=sqrt(dotc(grad,grad).real()/(C.basis->gInfo->detR*C.nCols()));
+		}
+		// A stationary transferred subspace can miss a lower symmetry sector.
+		// Metallic divided differences need the actual lowest stored bands;
+		// always verify non-reused offsets with the expanded Davidson subspace.
+		if((metallic() && !reuse) || !std::isfinite(residual) || residual>1e-6) {
+			nRetries++;
+			residual=minimizeOffsetDavidson(*this,C,params.nIterations);
+			if(!std::isfinite(residual) || residual>1e-6)
+				fprintf(stderr,"Offset-state solve failed on rank %d, k index %d, sign %s, residual %.6le Hartree.\n",
+					mpiWorld->iProcess(),q,sign ? "-q" : "+q",residual);
+		}
+		maxResidual=std::max(maxResidual,std::isfinite(residual) ? residual : INFINITY);
+	}
+	mpiWorld->allReduce(maxResidual,MPIUtil::ReduceMax);
+	mpiWorld->allReduce(nRetries,MPIUtil::ReduceSum);
+	mpiWorld->allReduce(nReused,MPIUtil::ReduceSum);
+	mpiWorld->allReduce(nRefined,MPIUtil::ReduceSum);
+	if(pInfo.phononGrid.isNonzero()) logPrintf("DFPT offset-state reuse: %d/%d k/sign pairs (%d required refinement).\n",nReused,2*eInfo.nStates,nRefined);
+	if(nRetries) logPrintf("Offset-state Davidson fallback used for %d k/sign pairs.\n",nRetries);
+	logPrintf("Offset-state maximum residual [Hartree]: %.6le\n",maxResidual);
+	if(!std::isfinite(maxResidual) || maxResidual>1e-6)
+		die("Offset occupied states did not converge; increase electronic-minimize nIterations.\n");
+}
+
+// Bloch derivative (grad + i*q_cart) of a lattice-periodic field.
+complexScalarField blochDerivative(const complexScalarField& f, const vector3<>& q, int idir)
+{
+	vector3<> dir; dir[idir]=1.;
+	return -I(ionicDerivative(J(f),q,dir));
+}
+
+// Derivative of a full reciprocal-space field at G+q along a Cartesian direction.
+complexScalarFieldTilde ionicDerivative(const complexScalarFieldTilde& V, const vector3<>& q, const vector3<>& dir)
+{
+	const GridInfo& g = V->gInfo;
+	complexScalarFieldTilde result = clone(V);
+	complex* data = result->data();
+	for(int ix=0; ix<g.S[0]; ix++)
+	for(int iy=0; iy<g.S[1]; iy++)
+	for(int iz=0; iz<g.S[2]; iz++)
+	{
+		vector3<int> iG(ix,iy,iz);
+		for(int j=0;j<3;j++) if(2*iG[j]>g.S[j]) iG[j]-=g.S[j];
+		data[g.fullGindex(iG)] *= complex(0,-dot((iG+q)*g.G,dir));
+	}
+	return result;
 }
 
 void PerturbationSolver::updateExcorrCache()
@@ -422,21 +841,13 @@ void PerturbationSolver::updateExcorrCache()
 	if (nXC.size() > 1)
 		return;
 	
-	int iDirStart, iDirStop;
-	TaskDivision(3, mpiWorld).myRange(iDirStart, iDirStop);
-	{
-		for(int i=iDirStart; i<iDirStop; i++) {
-			pInfo.IDJn_cached[i] = I(D(J(nXC[0]),i));
-		}
-
-		nullToZero(pInfo.sigma_cached, e.gInfo);
-		initZero(pInfo.sigma_cached);
-
-		for(int i=iDirStart; i<iDirStop; i++)
-			pInfo.sigma_cached += pInfo.IDJn_cached[i] * pInfo.IDJn_cached[i];
-		pInfo.sigma_cached->allReduceData(mpiWorld, MPIUtil::ReduceSum);
+	nullToZero(pInfo.sigma_cached,e.gInfo);
+	initZero(pInfo.sigma_cached);
+	for(int i=0;i<3;i++) {
+		pInfo.IDJn_cached[i]=I(D(J(nXC[0]),i));
+		pInfo.sigma_cached+=pInfo.IDJn_cached[i]*pInfo.IDJn_cached[i];
 	}
-	
+
 	e.exCorr.getSecondDerivatives(nXC[0], pInfo.e_nn_cached, pInfo.e_sigma_cached, pInfo.e_nsigma_cached, pInfo.e_sigmasigma_cached, 1e-9, &pInfo.sigma_cached);
 }
 
@@ -513,7 +924,6 @@ void PerturbationSolver::getdnInc(const std::vector<ColumnBundle>* dC, const std
 {   static StopWatch watch("getdnInc"); watch.start();
 
 	initZero(dnpq);
-	dnpq[0] = 0*dnpq[0];
 	initZero(dnmq);
 
 	for(int q=e.eInfo.qStart; q<e.eInfo.qStop; q++)
@@ -522,11 +932,11 @@ void PerturbationSolver::getdnInc(const std::vector<ColumnBundle>* dC, const std
 		int kmq_k = q+e.eInfo.nStates;
 
 		if (C) {
-			dnpq += e.eInfo.qnums[q].weight * diagouterI(eVars.F[q], (*C)[q], (*dC)[kmq_k], dnpq.size(), &e.gInfo);
-			dnpq += e.eInfo.qnums[q].weight * diagouterI(eVars.F[q], (*dC)[kpq_k], (*C)[q], dnpq.size(), &e.gInfo);
+			dnpq += e.eInfo.qnums[q].weight * diagouterI((metallic() ? eye(eInfo.nBands) : eVars.F[q]), (*C)[q], (*dC)[kmq_k], dnpq.size(), &e.gInfo);
+			dnpq += e.eInfo.qnums[q].weight * diagouterI((metallic() ? eye(eInfo.nBands) : eVars.F[q]), (*dC)[kpq_k], (*C)[q], dnpq.size(), &e.gInfo);
 		} else {
-			dnpq += e.eInfo.qnums[q].weight * diagouterI(eVars.F[q], eVars.C[q], (*dC)[kmq_k], dnpq.size(), &e.gInfo);
-			dnpq += e.eInfo.qnums[q].weight * diagouterI(eVars.F[q], (*dC)[kpq_k], eVars.C[q], dnpq.size(), &e.gInfo);
+			dnpq += e.eInfo.qnums[q].weight * diagouterI((metallic() ? eye(eInfo.nBands) : eVars.F[q]), eVars.C[q], (*dC)[kmq_k], dnpq.size(), &e.gInfo);
+			dnpq += e.eInfo.qnums[q].weight * diagouterI((metallic() ? eye(eInfo.nBands) : eVars.F[q]), (*dC)[kpq_k], eVars.C[q], dnpq.size(), &e.gInfo);
 		}
 	}
 
@@ -631,24 +1041,11 @@ void PerturbationSolver::dHpsi(const QuantumNumber& qnum, ColumnBundle& HCq, con
 }
 
 void PerturbationSolver::dHpsi(const QuantumNumber& qnum, ColumnBundle& HCq, const ColumnBundle& Cq, const complexScalarFieldArray& dVscloc)
-{   static StopWatch watch("dHpsi"); watch.start();
-	//complexScalarFieldArray dVscloc(eVars.Vscloc.size());
-
-	//getdVsclocPsi(dn, dVscloc, q);
-
-	ColumnBundle HCr, HCi;
-	HCr = HCq.similar();
-	HCi = HCq.similar();
-	HCr.zero(); HCi.zero();
-
-	dH_Vscloc(qnum, HCr, Cq, Real(dVscloc));
-	dH_Vscloc(qnum, HCi, Cq, Imag(dVscloc));
-
-	HCq = HCr;
-
-	HCq += complex(0,1)*HCi;
-	
-	watch.stop();
+{
+	ColumnBundle HCr = HCq.similar(), HCi = HCq.similar();
+	HCr = Idag_DiagV_I(Cq, Real(dVscloc), &HCr);
+	HCi = Idag_DiagV_I(Cq, Imag(dVscloc), &HCi);
+	HCq = HCr + complex(0,1)*HCi;
 }
 
 void PerturbationSolver::dHtau(const QuantumNumber& qnum, ColumnBundle& HCq, const ColumnBundle& Cq, const ScalarFieldArray& dVscloc)
@@ -697,26 +1094,23 @@ void PerturbationSolver::dHtau(const QuantumNumber& qnum, ColumnBundle& HCq, con
 }
 
 void PerturbationSolver::dHtau(const QuantumNumber& qnum, ColumnBundle& HCq, const ColumnBundle& Cq, int qsign)
-{	static StopWatch watch("dHtau"); watch.start();
-	assert(Cq);
-
+{
 	complexScalarFieldArray dVscloc(eVars.Vscloc.size());
-
 	getdVsclocTau(dVscloc, qsign);
-
-	ColumnBundle HCr, HCi;
-	HCr = HCq.similar();
-	HCi = HCq.similar();
-	HCr.zero(); HCi.zero();
-
-	dH_Vscloc(qnum, HCr, Cq, Real(dVscloc));
-	dH_Vscloc(qnum, HCi, Cq, Imag(dVscloc));
-	
-	assert(!pInfo.datom);
-
-	HCq = HCr;
-	HCq += complex(0,1)*HCi;
-	watch.stop();
+	dHpsi(qnum, HCq, Cq, dVscloc);
+	if(pInfo.datom)
+	{
+		const AtomicMode& m = pInfo.datom->mode;
+		auto sp = iInfo.species[m.sp];
+		ColumnBundle Vin = sp->getVatom(Cq,m.at);
+		ColumnBundle Vout = sp->getVatom(HCq,m.at);
+		ColumnBundle dVin = -D(Vin,m.dirCartesian), dVout = -D(Vout,m.dirCartesian);
+		if(Vin.nCols())
+		{
+			HCq += dVout*(sp->MnlAll*(Vin^Cq));
+			HCq += Vout*(sp->MnlAll*(dVin^Cq));
+		}
+	}
 }
 
 void PerturbationSolver::getdVsclocPsi(const ScalarFieldArray dn, ScalarFieldArray& dVscloc)
@@ -757,18 +1151,26 @@ void PerturbationSolver::getdVsclocPsi(const complexScalarFieldArray dn, complex
 	assert(e.coulombParams.geometry == CoulombParams::Geometry::Periodic);
 	dVsclocTilde = -4*M_PI*Linv(O(dnTilde), q);
 
-	//Second derivative of excorr energy, real and imaginary parts
-	ScalarFieldArray dVxcRe(eVars.Vxc.size());
-	ScalarFieldArray dVxcIm(eVars.Vxc.size());
-	e.exCorr.get_dVxc(eVars.get_nXC(), &dVxcRe, false, &eVars.tau, &eVars.Vtau, Real(dn));
-	e.exCorr.get_dVxc(eVars.get_nXC(), &dVxcIm, false, &eVars.tau, &eVars.Vtau, Imag(dn));
-
-	for(unsigned s=0; s<eVars.Vscloc.size(); s++)
-	{	dVscloc[s] = Complex(JdagOJ(dVxcRe[s]), JdagOJ(dVxcIm[s]));
-
-		if(s<2) //Include all the spin-independent contributions along the diagonal alone
-			dVscloc[s] += Jdag(O(dVsclocTilde), true);
+	if(e.exCorr.needFiniteDifference_dVxc())
+		die("Finite-q response requires an analytic LDA/GGA XC kernel.\n");
+	complexScalarField dVxc = pInfo.e_nn_cached*dn[0];
+	if(pInfo.e_sigma_cached) // LDA has no gradient-density derivatives.
+	{
+		complexScalarField dsigma;
+		nullToZero(dsigma,e.gInfo);
+		initZero(dsigma);
+		for(int i=0;i<3;i++)
+			dsigma += 2*pInfo.IDJn_cached[i]*blochDerivative(dn[0],*q,i);
+		dVxc += pInfo.e_nsigma_cached*dsigma;
+		for(int i=0;i<3;i++)
+		{
+			complexScalarField term = pInfo.e_sigma_cached*blochDerivative(dn[0],*q,i)
+				+ pInfo.IDJn_cached[i]*(pInfo.e_nsigma_cached*dn[0]+pInfo.e_sigmasigma_cached*dsigma);
+			dVxc -= 2*blochDerivative(term,*q,i);
+		}
 	}
+	for(unsigned s=0;s<dVscloc.size();s++)
+		dVscloc[s] = JdagOJ(dVxc) + Jdag(O(dVsclocTilde),true);
 
 	e.symm.symmetrize(dVscloc);
 	watch.stop();
@@ -844,7 +1246,7 @@ void PerturbationSolver::getdVsclocTau(ScalarFieldArray& dVscloc, ScalarFieldArr
 void PerturbationSolver::getdVsclocTau(complexScalarFieldArray& dVscloc, int qsign)
 {	static StopWatch watch("getdVsclocTau"); watch.start();
 
-	assert(!pInfo.commensurate && !pInfo.datom);
+	assert(!pInfo.commensurate);
 	
 	nullToZero(dVscloc, e.gInfo);
 	initZero(dVscloc);
@@ -852,6 +1254,13 @@ void PerturbationSolver::getdVsclocTau(complexScalarFieldArray& dVscloc, int qsi
 	for(unsigned s=0; s<eVars.Vscloc.size(); s++)
 	{
 		vector3<> qvec = pInfo.qvec*qsign;
+		if(pInfo.datom)
+		{
+			const AtomicMode& m = pInfo.datom->mode;
+			auto sp = iInfo.species[m.sp];
+			dVscloc[s] += Jdag(O(ionicDerivative(sp->getLocalPotential(qvec,m.at),qvec,m.dirCartesian)),true);
+		}
+
 		
 		if (pInfo.dVext) {
 			if (qsign == 1) dVscloc[s] += JdagOJ(pInfo.dVext->dVextpq[s]);
@@ -883,4 +1292,3 @@ ScalarFieldArray PerturbationSolver::getdnXC(const ScalarField dnCore) const
 	
 	return dnXC;
 }
-

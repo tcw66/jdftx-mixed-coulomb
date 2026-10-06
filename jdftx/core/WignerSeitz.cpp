@@ -394,6 +394,10 @@ void WignerSeitz::addPlane(const vector3<int>& a)
 					vertex.remove(vOther);
 					delete vOther;
 				}
+				// Welding can turn a second edge into a self-loop, represented
+				// twice in v->edge. Removing both links then invalidates the
+				// iterator returned by erase above. Restart after each weld.
+				eIter = v->edge.begin();
 			}
 		}
 	}

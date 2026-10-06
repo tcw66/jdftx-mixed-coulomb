@@ -42,7 +42,8 @@ AtomPerturbation::AtomPerturbation (unsigned int sp, unsigned int at, int iDir, 
 
 	m.dirLattice = e.gInfo.invR*m.dirCartesian;
 	mode = m;
-	init(e, e.eVars, e.eInfo);
+	// During parsing, bases and electronic dimensions are not yet available.
+	if(!e.basis.empty() && e.eInfo.nBands && e.pertInfo.commensurate && !e.pertInfo.phononGrid.isNonzero()) init(e,e.eVars,e.eInfo);
 }
 
 AtomPerturbation::AtomPerturbation (unsigned int sp, unsigned int at, vector3<> dirCartesian, const Everything& e) : Perturbation(e)
@@ -55,11 +56,13 @@ AtomPerturbation::AtomPerturbation (unsigned int sp, unsigned int at, vector3<> 
 
 	m.dirLattice = e.gInfo.invR*m.dirCartesian;
 	mode = m;
-	init(e, e.eVars, e.eInfo);
+	// During parsing, bases and electronic dimensions are not yet available.
+	if(!e.basis.empty() && e.eInfo.nBands && e.pertInfo.commensurate && !e.pertInfo.phononGrid.isNonzero()) init(e,e.eVars,e.eInfo);
 }
 
 void AtomPerturbation::init(const Everything &e, const ElecVars& eVars, const ElecInfo& eInfo)
 {
+	mode.dirLattice = e.gInfo.invR*mode.dirCartesian;
 	Vatom.resize(eInfo.nStates);
 	dVatom.resize(eInfo.nStates);
 	VdagCatom.resize(eInfo.nStates);
@@ -75,9 +78,25 @@ void PerturbationInfo::setup(const Everything &e, const ElecVars &eVars)
 {
 	solverParams.fpLog = globalLog;
 	solverParams.linePrefix = "PerturbMinimize: ";
-	if (!solverParams.nIterations)
+	if (!solverParams.nIterations && !phononGrid.isNonzero())
 		return;
 
+	if(phononGrid.isNonzero()) {
+		Citations::add("Phonons from density-functional perturbation theory",
+			"S. Baroni, S. de Gironcoli, A. Dal Corso and P. Giannozzi, Rev. Mod. Phys. 73, 515 (2001)");
+		if(e.eInfo.fillingsUpdate==ElecInfo::FillingsHsub)
+			Citations::add("Metallic phonons with electronic smearing",
+				"S. de Gironcoli, Phys. Rev. B 51, 6773 (1995)");
+		for(auto sp:e.iInfo.species)
+			if(sp->isUltrasoft() || sp->isRelativistic() || sp->hasCoreDensity())
+				die("phonon-dfpt requires nonrelativistic norm-conserving potentials without nonlinear core corrections.\n");
+		if(!solverParams.nIterations) die("phonon-dfpt requires perturb-minimize nIterations > 0.\n");
+		if(e.symm.mode!=SymmetriesNone || e.coulombParams.geometry!=CoulombParams::Periodic)
+			die("phonon-dfpt requires symmetries none and periodic Coulomb.\n");
+		if(e.iInfo.vdWenable || e.iInfo.nChargeball || e.cntrl.fixed_H || e.cntrl.dumpOnly || e.ionicDynParams.nSteps || e.ionicMinParams.nIterations || e.latticeMinParams.nIterations || e.vibrations)
+			die("phonon-dfpt does not support vdW, chargeballs, fixed potentials or ionic/lattice optimization in the same run.\n");
+		if(e.exCorr.needFiniteDifference_dVxc()) die("phonon-dfpt requires an analytic LDA/GGA XC kernel.\n");
+	}
 	const ElecInfo &eInfo = e.eInfo;
 
 	if (!commensurate)
@@ -102,10 +121,10 @@ void PerturbationInfo::setup(const Everything &e, const ElecVars &eVars)
 		dVsclocTau.resize(eVars.Vscloc.size());
 		dn.resize(eVars.Vscloc.size());
 		nullToZero(dn, e.gInfo);
-		if (datom) datom->init(e, eVars, eInfo);
 	} else {
 		initInc(dC, 2*eInfo.nStates, eInfo.nBands, &eInfo);
 		initInc(Cinc, 2*eInfo.nStates, eInfo.nBands, &eInfo);
+		offsetStatesReady = false;
 		dVsclocpq.resize(eVars.Vscloc.size());
 		dVsclocmq.resize(eVars.Vscloc.size());
 		dnpq.resize(eVars.n.size());
@@ -150,9 +169,11 @@ void PerturbationInfo::setup(const Everything &e, const ElecVars &eVars)
 		}
 	}
 
-	if (!commensurate)
-		read(e.eInfo, e, Cinc, wfnsFilename.c_str(), nullptr);
+	if(readConversion) readConversion->Ecut=e.cntrl.Ecut;
+	if (!commensurate && !wfnsFilename.empty())
+		read(e.eInfo, e, Cinc, wfnsFilename.c_str(), readConversion.get());
 	
+	if(datom && commensurate) datom->init(e, eVars, eInfo);
 	checkSupportedFeatures(e, e.eInfo);
 }
 
@@ -160,7 +181,7 @@ void PerturbationInfo::setup(const Everything &e, const ElecVars &eVars)
 void PerturbationInfo::read(const ElecInfo &eInfo, const Everything &e, std::vector<ColumnBundle>& C, const char *fname, const ElecInfo::ColumnBundleReadConversion* conversion) const
 {	if(conversion && conversion->realSpace)
 	{
-		die("Real space incommensurate wavefunctions are required.\n")
+		die("Reciprocal-space offset wavefunctions are required.\n")
 	}
 	else
 	{	//Check if a conversion is actually needed:
@@ -303,7 +324,7 @@ void PerturbationInfo::initInc(std::vector<ColumnBundle>& Y, int nbundles, int n
 {
 	Y.resize(nbundles);
 	if(ncols && eInfo)
-	{	assert(nbundles == 2*eInfo->qStop);
+	{	assert(nbundles == 2*eInfo->nStates);
 		for(int q=eInfo->qStart; q<eInfo->qStop; q++) {
 			int kpq = q ;
 			int kmq = q + eInfo->nStates;
@@ -315,7 +336,15 @@ void PerturbationInfo::initInc(std::vector<ColumnBundle>& Y, int nbundles, int n
 
 void PerturbationInfo::checkSupportedFeatures(const Everything &e, const ElecInfo &eInfo)
 {
-	if(!(eInfo.fillingsUpdate==ElecInfo::FillingsConst && eInfo.scalarFillings))
+	bool metallicPhonons=phononGrid.isNonzero() && eInfo.fillingsUpdate==ElecInfo::FillingsHsub;
+	if(metallicPhonons) {
+		if(eInfo.spinType!=SpinNone || !std::isnan(eInfo.mu))
+			die("Metallic phonon-dfpt requires nonmagnetic states at fixed electron number.\n");
+		if(!(eInfo.smearingWidth>0.) || !std::isfinite(eInfo.smearingWidth)
+			|| (eInfo.smearingType!=ElecInfo::SmearingFermi && eInfo.smearingType!=ElecInfo::SmearingGauss))
+			die("Metallic phonon-dfpt requires Fermi or Gauss smearing with a positive finite width.\n");
+	}
+	else if(!(eInfo.fillingsUpdate==ElecInfo::FillingsConst && eInfo.scalarFillings))
 		die("Constant fillings only.\n");
 	if(e.exCorr.exxFactor())
 		die("Variational perturbation currently does not support exact exchange.\n");
@@ -329,20 +358,25 @@ void PerturbationInfo::checkSupportedFeatures(const Everything &e, const ElecInf
 		die("Variational perturbation currently does not support orbital dependent potential functionals.\n");
 	if(e.eVars.fluidParams.fluidType != FluidNone)
 		die("Variational perturbation does not support fluids.\n");
+	if(!commensurate && eInfo.spinorLength()!=1)
+		die("Finite-q response supports scalar wavefunctions only.\n");
+	if(!commensurate && datom)
+		for(auto sp: e.iInfo.species)
+			if(sp->hasCoreDensity()) die("Finite-q atomic response does not yet support nonlinear core corrections.\n");
 	if (e.eVars.n.size() > 1)
 		die("Multiple spin channels not supported yet.\n");
 	if (e.coulombParams.geometry != CoulombParams::Geometry::Periodic && !commensurate)
-		die("Periodic coloumb interaction required for incommensurate perturbations.\n")
+		die("Periodic Coulomb interaction required for incommensurate perturbations.\n")
 		
 	if (e.symm.mode != SymmetriesNone)
 	{
 		if (!commensurate)
 			die("Symmetries are not supported with incommensurate perturbations.\n");
 		
-		if (dVext) {
+		if (dVext && commensurate) {
 			ScalarFieldArray dVext_sym = clone(dVext->dVext);
 			e.symm.symmetrize(dVext_sym);
-			if (nrm2(dVext_sym[0] - dVext->dVext[0])/nrm2(dVext->dVext[0]) < symmThreshold)
+			if (nrm2(dVext_sym[0] - dVext->dVext[0]) > symmThreshold*nrm2(dVext->dVext[0]))
 			logPrintf("Warning: dVext->dVext does not obey symmetries.\n");
 		}
 	}
@@ -350,23 +384,14 @@ void PerturbationInfo::checkSupportedFeatures(const Everything &e, const ElecInf
 	for (auto sp: e.iInfo.species) {
 		if (sp->isRelativistic())
 			die("Relativistic potentials are not supported yet.\n");
-		if (sp->isUltrasoft() & !commensurate)
+		if (sp->isUltrasoft() && !commensurate)
 			die("Ultrasoft potentials are compatible with commensurate perturbations only.\n");
 	}
 
 	if (e.exCorr.needFiniteDifference_dVxc())
-		logPrintf("Excorr analytical derivative not available. Using finite differencing instead.\n");
+		logPrintf("Excorr analytical derivative not available. Using finite differencing for lattice-periodic response.\n");
 
-	if (!commensurate) {
-		if(e.eVars.wfnsFilename.empty() && wfnsFilename.empty()) {
-			die("Currently, incommensurate perturbations require ground state wavefunctions to be loaded in.\n");
-			//computeIncommensurateWfns();
-		} else if (!e.eVars.wfnsFilename.empty() && wfnsFilename.empty()) {
-			die("Please specify offset wavefunctions.\n")
-		} else if (e.eVars.wfnsFilename.empty() && !wfnsFilename.empty()) {
-			die("Please specify ground state wavefunctions.\n")
-		}
-	}
+
 }
 
 bool PerturbationInfo::densityAugRequired(const Everything &e) {
@@ -380,7 +405,7 @@ bool PerturbationInfo::densityAugRequired(const Everything &e) {
 
 void PerturbationInfo::sampleCB (ColumnBundle C, std::string name) {
 	if (C.nData() < 10) return;
-	double *dat = (double*)(C.getColumn(0, 0)->dataPref());
+	double *dat = (double*)C.data();
 	logPrintf("ColumnBundle %s values: %g %g %g %g %g %g %g %g %g %g\n", name.c_str(), dat[0], dat[1], dat[2], dat[3], dat[4], dat[5], dat[6], dat[7], dat[8], dat[9]);
 }
 
@@ -390,13 +415,13 @@ void PerturbationInfo::sampleMat (matrix C, std::string name) {
 }
 
 void PerturbationInfo::sampleField (ScalarField V, std::string name) {
-	if (V->nElem < 10) return;
-	double *dat = V->dataPref();
+	if (!V || V->nElem < 10) return;
+	double *dat = V->data();
 	logPrintf("ScalarField %s values %g %g %g %g %g %g %g %g %g %g\n", name.c_str(), dat[0], dat[1], dat[2], dat[3], dat[4], dat[5], dat[6], dat[7], dat[8], dat[9]);
 }
 
 void PerturbationInfo::sampleField (ScalarFieldTilde V, std::string name) {
-	if (V->nElem < 10) return;
-	double *dat = (double*)(V->dataPref());
+	if (!V || V->nElem < 10) return;
+	double *dat = (double*)V->data();
 	logPrintf("ScalarFieldTidle %s values %g %g %g %g %g %g %g %g %g %g\n", name.c_str(), dat[0], dat[1], dat[2], dat[3], dat[4], dat[5], dat[6], dat[7], dat[8], dat[9]);
 }

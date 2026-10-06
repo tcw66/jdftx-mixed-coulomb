@@ -1,0 +1,255 @@
+/** \page DFPTPhonons Primitive-cell DFPT phonons
+
+The `jdftx` executable can calculate force matrices on a uniform phonon q mesh
+without constructing an electronic supercell. The implementation follows the
+Sternheimer response and ionic-potential derivatives of Baroni et al.,
+Rev. Mod. Phys. 73, 515 (2001), Secs. II.C.1 and II.D, in particular Eqs. (85)-(88).
+Both k+q and k-q responses are retained. The k mesh and phonon q mesh can be
+chosen independently; shifted occupied states are solved automatically in the
+unperturbed self-consistent potential.
+
+Add the following to an insulating primitive-cell input:
+\code
+symmetries none
+coulomb-interaction periodic
+electronic-minimize nIterations 300 energyDiffThreshold 1e-12
+perturb-minimize nIterations 300 residualTol 1e-7 residualDiffThreshold 0
+phonon-dfpt 4 4 4
+dump-name Si.$VAR
+\endcode
+Run `jdftx -i Si.in -o Si.out`. The q mesh is Gamma centered. By default, only
+symmetry-inequivalent q points are solved; the complete grid is reconstructed
+before Fourier transformation. q coordinates are fractional reciprocal-lattice coordinates;
+ionic displacement directions are Cartesian, in bohr. Insulating calculations
+include only occupied bands; smeared calculations also need empty bands.
+Atomic masses come from the species masses, as in the existing
+supercell phonon driver. Set a sufficiently converged electronic k mesh and
+plane-wave cutoff, and converge the phonon q mesh separately.
+
+The current scope is periodic, nonmagnetic systems with scalar,
+fully occupied bands or finite-width Fermi/Gauss smearing, an analytic LDA/GGA XC kernel, and nonrelativistic
+norm-conserving pseudopotentials without nonlinear core corrections (for example,
+SG15). Ultrasoft potentials, nonlinear core corrections, spinors, exact
+exchange, DFT+U, meta-GGAs, fluids, vdW pair corrections and chargeballs are not
+supported in this primitive-cell path. Incompatible inputs are rejected. The
+existing `phonon` executable and its `useVPT` supercell mode remain available.
+Do ionic or lattice optimization in a separate calculation first. Restart files
+can be used, but the phonon driver still minimizes the ground state once.
+
+For metals and gapless systems, add `elec-smearing Fermi 0.01` (width in Hartree)
+or `elec-smearing Gauss 0.01` and include empty bands with `elec-n-bands`.
+The highest stored band must have occupation below 1e-6 at every source and
+offset k point; otherwise the calculation stops with a request for more bands.
+Converge both the k mesh and smearing width for the physical system. An SCF
+density solve is recommended to converge the partially occupied source bands.
+The metallic response follows Sec. II.C.4, especially Eqs. (69)-(70) and (75):
+occupation divided differences include their finite coincident-energy limit,
+with energy-ordering smearing to partition each pair without double counting,
+while Sternheimer equations account for states outside the stored subspace.
+At Gamma a DOS projection includes the Fermi-level shift and enforces fixed
+electron number. These are derivatives of the smeared electronic free energy
+at fixed smearing width. Fixed chemical potential, Methfessel-Paxton and cold
+smearing are currently rejected. The q/displacement symmetry reductions,
+offset-state reuse and symmetry-reduced SCF restarts also work with smearing;
+SCF and DFPT restart inputs must use identical smearing settings and band count.
+
+Q reduction detects space-group operations independently of the electronic
+symmetry setting, which must remain `symmetries none`. Only operations preserving
+the entire q grid, electronic k mesh and weights, FFT sampling and ground-state
+Hamiltonian are retained. Atom permutations include their integer cell shifts;
+the resulting Bloch phases are essential for nonsymmorphic operations. All
+equivalent mappings, including operations preserving a representative q, are
+averaged. Time reversal is also used when the electronic k mesh is invariant
+under k to -k. The log reports the number of representatives and response solves.
+The response still uses the full electronic k mesh. Atomic displacement responses
+are reduced by the little group of each q by default. Their symmetry images,
+including complex cell phases and antiunitary time reversal, span the Cartesian
+displacement space; the remaining force-matrix columns are reconstructed by
+linear algebra. Set `phonon-dfpt-displacement-symmetries no` to solve all directions.
+Set `phonon-dfpt-symmetries no` to calculate every q for a comparison.
+
+The ground-state SCF can use a symmetry-reduced k mesh. Save its `State` and
+`Fillings`, then replace `initial-state` in the DFPT input with:
+\code
+phonon-dfpt-initial-state 01-scf.in scf.$VAR
+\endcode
+Here `01-scf.in` is the original symmetry-enabled SCF input. Include paths and
+checkpoint paths resolve relative to the working directory, as in normal JDFTx
+inputs. The target DFPT input retains `symmetries none`. Geometry, species order,
+pseudopotential paths, cutoff, band count, smearing and weighted k mesh must match.
+Wavefunctions are transformed onto the full mesh with reciprocal-index remapping,
+space-group translation phases and time reversal, and distributed across MPI ranks.
+The full ground state is polished before response calculations. Use ordinary
+`initial-state` to read an existing full-mesh checkpoint.
+
+MPI ranks normally divide the electronic k points, with q and displacement
+directions solved sequentially. Set `phonon-dfpt-q-groups 2` to split ranks into
+two independent q groups. Each group solves different representative q points,
+while its ranks divide the complete electronic k mesh. For example, four MPI
+ranks and two q groups give two ranks per group. Group sizes may be unequal.
+Each group initializes and polishes its own ground state from the same input;
+this increases replicated memory and initialization work. Use no more groups
+than MPI ranks, and preferably no more than the number of representative q
+points. The q groups collect all force matrices before the common symmetry
+reconstruction and Fourier transformation. Only the first group writes dumps,
+and the final phonon matrices are written once. A failure in a group aborts the
+parent calculation. The default is one q group. Atomic displacement directions
+are still sequential within each group; GPU and CPU threads accelerate local
+plane-wave operations.
+
+For commensurate k +/- q points already on the electronic mesh, stored states
+are copied from the converged ground state, including reciprocal wrapping. The
+Hamiltonian residual is checked and states are refined only when necessary.
+`phonon-dfpt-reuse-offset-states no` disables this optimization for validation.
+Off-mesh offset states are minimized at fixed potential. If the nonlinear
+minimizer leaves a large residual, a restarted block Davidson fallback expands
+the trial subspace with independent vectors. Both paths must pass the offset
+residual check; increasing `electronic-minimize nIterations` increases the
+fallback iteration limit as well. A failed grid calculation does not currently
+save completed q matrices for restart.
+
+The force matrix contains the self-consistent electronic response, explicit
+second local and nonlocal pseudopotential derivatives, and an analytic finite-q
+ionic Ewald Hessian. The finite-q GGA kernel uses the Bloch derivative
+`gradient + i*q_cart`, including its divergence terms. Response residuals and
+Hermiticity are checked before producing output. Reciprocal reality is enforced
+between q and -q, and the Gamma matrix is projected onto the complement of the
+three uniform Cartesian translations to impose the acoustic sum rule. The size
+of this correction is reported; a large correction warrants checking convergence.
+
+Output files:
+- `Si.phononForceMatrixQ`: text, with the number of q points and modes, followed
+  by each q and its complex row-major Cartesian force matrix in Hartree/bohr^2.
+- `Si.phononCellMap`: integer lattice vectors and Cartesian cell offsets.
+- `Si.phononCellWeights`: binary atom-pair Wigner-Seitz weights.
+- `Si.phononOmegaSq`: little-endian binary doubles, a column-major mass-weighted
+  matrix for each cell in cell-map order, with Wigner-Seitz weights included.
+  Eigenvalues are squared frequencies in atomic units.
+- `Si.phononBasis`: atom identities, Cartesian mass-weighted displacement
+  directions and masses in amu.
+
+The cell-phase convention is `u_s(R) = u_s(q) exp(2*pi*i*q.R)`, without an extra
+basis-position phase. The discrete inverse transform is
+`Phi(R) = sum_q exp(-2*pi*i*q.R) C(q)/Nq`. Equivalent boundary cells are weighted
+using the existing Wigner-Seitz cell map. After mass weighting,
+`D(q) = sum_R exp(2*pi*i*q.R) OmegaSq(R)` reproduces the coarse q matrices.
+Interpolate the matrices first, then diagonalize; do not interpolate eigenvalues
+or eigenvectors independently.
+
+Create a text file `qpath.dat` with three fractional q coordinates per row, then
+run the NumPy-based utility:
+\code
+python3 /path/to/jdftx/scripts/phononDFPT Si. qpath.dat -o Si.frequencies.dat
+\endcode
+The output contains q followed by all mode frequencies in inverse centimeters.
+A negative number denotes an imaginary frequency. `--matrices Si.phonons.npz`
+also saves complex dynamical matrices, squared frequencies and eigenvectors.
+The utility reads the same lattice-space files as the supercell phonon workflow.
+
+\section DFPTElectronPhonon Electron-phonon matrix elements
+
+Add `phonon-dfpt-electron-phonon yes` to export the fully screened Cartesian
+Hamiltonian derivatives at every computed q and electronic k point. The operator
+includes the first ionic local and nonlocal pseudopotential derivatives and the
+induced Hartree and XC potential, evaluated after the response converges:
+`dH_a(m,n;k,q) = <psi_m,k+q | dH_SCF/du_a(q) | psi_n,k>`.
+No occupations, spin factor, k weights, atomic masses or zero-point amplitudes
+are included in these derivatives. Their units are Hartree/bohr. The metallic
+Gamma response includes the fixed-number occupation/Fermi-level response in
+screening; the exported Hamiltonian derivative is not shifted by minus d(mu).
+
+All stored bands are exported. A fully occupied insulating input exports only
+valence-band matrix elements. To include conduction bands, run a new SCF with
+Fermi/Gauss smearing and additional `elec-n-bands`, and use exactly the same
+settings in the DFPT restart. Smearing can be small relative to the insulating
+gap; converge it along with the k mesh and empty-band count. The example in
+`examples/dfpt-silicon-electron-phonon` includes empty bands.
+
+This option overrides q and displacement symmetry reduction and computes all
+Cartesian responses explicitly. Transforming force constants alone does not
+transform the electronic Bloch phases needed for band matrix elements.
+Offset-state reuse, reduced-SCF unfolding and MPI q groups still work.
+Each q group writes its own distinct q files; only the common output head
+writes the final manifest and phonon interpolation files. Storage is
+`16*Nq*Nk*(3*Natoms)*Nbands^2` bytes plus metadata. Work and storage can therefore
+increase considerably compared with a phonon-only symmetry-reduced run.
+
+The output prefix has these additional files:
+- `phononEph`: text manifest, format version 1, Nq, Nk, Nbands, Nmodes, then the q grid.
+- `phononEphQ000000`, `phononEphQ000001`, etc.: binary little-endian complex128
+  derivatives in Cartesian mode, k, column-major band-matrix order. Matrix rows
+  are final bands at k+q, columns are initial bands at k. The mode order is the
+  same as `phononBasis`, but these derivatives use unit Cartesian displacements.
+- Each binary has a `.meta` file with version, Nk, Nbands, Nmodes, q, then for
+  each k a row of k[3], weight, target-index, (k+q)[3], followed by two rows of
+  source and target band energies in Hartree. target-index is zero based on the
+  ground electronic mesh; -1 means an off-mesh target. Weights include the
+  nonmagnetic spin degeneracy, as in JDFTx's electronic integration.
+
+Source states are ground-state Hamiltonian eigenvectors. On-mesh targets are
+the same ground eigenvectors mapped into the wrapped k+q plane-wave basis,
+so one q group has a common electronic gauge. Off-mesh targets are separately
+diagonalized offset states. Independently initialized q groups can differ in
+electronic phases and rotations within degenerate subspaces. Individual complex
+matrix entries depend on that gauge; scattering probabilities and degenerate
+subspace sums should be compared accordingly.
+When selecting a band window for subspace sums or cross-run comparisons,
+include entire degenerate multiplets; a cutoff through a degenerate pair does
+not define a unique electronic subspace.
+
+Convert to phonon-mode matrix elements with:
+\code
+python3 /path/to/jdftx/scripts/electronPhononDFPT phonon. -o electron-phonon
+\endcode
+This writes one NumPy NPZ file per q with `g[k,mode,final_band,initial_band]`,
+band energies and signed phonon energies in meV by default. `--units eV` or
+`--units Hartree` changes these energy units. `--q-index 1` selects one computed
+q; repeat it to select several. `--bands 0 8` selects zero-based bands 0 through
+7 on both matrix axes. Each file also records q, k, k+q, integration weights,
+band indices, eigenvectors, squared frequencies, a valid-mode mask, and the
+Cartesian derivatives in Hartree/bohr.
+
+With mass-weighted dynamical eigenvectors e(a,v), unit norm, the conversion is
+`g(m,n,v;k,q) = sum_a e(a,v;q)*dH_a(m,n;k,q)/sqrt(2*M_a*omega(q,v))`,
+where M is in electron masses and omega is in atomic units. The phonon
+eigenvector is not conjugated in this contraction. Imaginary, zero and tiny
+positive frequencies have no usable real zero-point normalization and their g
+entries are NaN; `valid_modes` identifies the retained modes.
+The positive cutoff defaults to 0.01 meV and is controlled by
+`--min-frequency-meV`. Raw Cartesian derivatives remain available for all modes.
+The phonon acoustic sum rule is applied to frequencies, without subtracting a
+uniform-displacement operator from the Cartesian electron-phonon derivatives.
+
+This converter evaluates the computed coarse q mesh. Arbitrary-q phonon
+frequencies can still be interpolated by `phononDFPT`, but Bloch matrix elements
+cannot be Fourier-interpolated without aligning the electronic gauges. This
+export is not the supercell `phononHsub` format consumed by the existing Wannier
+driver; integration with Wannier electron-phonon interpolation remains separate.
+Validation (`dfptElectronPhonon` and `dfptElectronPhononMPI`) compares screened
+diagonal band derivatives with independent SCF finite differences, checks q/-q
+Hermitian reciprocity, checks mass/frequency normalization, exercises off-mesh
+targets and compares MPI q-group coupling norms.
+
+Polar crystals require special care: the Gamma calculation uses zero macroscopic
+electric field. This implementation does not compute Born effective charges or
+subtract and restore the long-range dipole contribution for interpolation.
+Consequently the Fourier interpolation does not capture the directional
+nonanalytic LO-TO limit at Gamma in polar materials. See Sec. II.D.2-3 of the
+review before applying ordinary finite-mesh interpolation to those systems.
+
+Validation is available through CTest (`dfptEwaldSolver`, `dfptInterpolation`,
+`dfptRestart`, and `dfptResponse` / `dfptResponseLDA` when SG15 H is found).
+`dfptQSymmetry`, enabled when SG15 Si is found, compares reconstructed complex
+matrices with explicit solves on an anisotropic q grid and checks the Fourier
+round trip. `dfptQParallel` additionally compares MPI q-group configurations,
+including unequal and idle groups, end-state dumps and group failure handling.
+`DFPT_H_PSEUDO` is a CMake cache path to
+`H_ONCV_PBE.upf` for the physical response regression. To additionally compare an
+uneven MPI distribution against serial results:
+\code
+DFPT_MPI_LAUNCH="mpirun -n 2" python3 jdftx/test/dfpt/checkResponse.py build /path/to/H_ONCV_PBE.upf
+\endcode
+The physical regression compares real and imaginary parts of a nonzero-q GGA
+force matrix with independently minimized, sinusoidally displaced supercell
+forces. It also checks acoustic translations and the Fourier grid round trip.
+*/

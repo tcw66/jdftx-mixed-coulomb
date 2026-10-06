@@ -27,20 +27,51 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include <electronic/Vibrations.h>
 #include <electronic/IonicDynamics.h>
 #include <perturb/PerturbationSolver.h>
+#include <perturb/DFPTPhonon.h>
 #include <fluid/FluidSolver.h>
 #include <core/Util.h>
 #include <commands/parser.h>
 
+namespace {
+// Establish the q communicator before setup so each group's wavefunctions and
+// all k-point allocations are created with its own process distribution.
+struct DFPTQGroups {
+	MPIUtil* parent=nullptr;
+	const MPIUtil* previousAbort=nullptr;
+	std::unique_ptr<MPIUtil> group;
+	void setup(int nGroups) {
+		if(nGroups>mpiWorld->nProcesses())
+			die("phonon-dfpt-q-groups requires no more groups than MPI ranks.\n");
+		if(nGroups==1) return;
+		parent=mpiWorld;
+		previousAbort=mpiAbortComm;
+		group.reset(new MPIUtil(0,nullptr,MPIUtil::ProcDivision(parent,nGroups)));
+		mpiWorld=group.get();
+		mpiAbortComm=parent;
+		logPrintf("DFPT q parallelism: %d groups over %d MPI ranks; group 0 has %d ranks.\n",
+			nGroups,parent->nProcesses(),mpiWorld->nProcesses());
+	}
+	bool outputGroup() const { return !group || group->procDivision.iGroup==0; }
+	~DFPTQGroups() {
+		if(group) {mpiWorld=parent; mpiAbortComm=previousAbort;}
+	}
+};
+}
 
 void run(string inputFilename, bool dryRun, bool printDefaults)
 {
 	//Parse input file and setup
+	DFPTQGroups qGroups; // must outlive Everything and its group-local state
 	Everything e;
 	ElecVars& eVars = e.eVars;
 	parse(readInputFile(inputFilename), e, printDefaults);
+	qGroups.setup(e.pertInfo.phononQGroups);
+	if(!qGroups.outputGroup()) e.dump.clear(); // prevent competing iteration/end dumps
 	if(dryRun) eVars.skipWfnsInit = true;
+	if(!e.pertInfo.phononInitialInput.empty()) eVars.skipWfnsInit = true;
 	e.setup();
-	e.dump(DumpFreq_Init, 0);
+	if(!e.pertInfo.phononInitialInput.empty()) loadSymmetryReducedDFPTState(e,dryRun);
+	if(qGroups.outputGroup()) e.dump(DumpFreq_Init, 0);
 	Citations::print();
 	if(dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");
@@ -100,6 +131,8 @@ void run(string inputFilename, bool dryRun, bool printDefaults)
 		LatticeMinimizer lmin(e);
 		lmin.minimize(e.latticeMinParams);
 	}
+	else if(e.pertInfo.phononGrid.isNonzero())
+	{ calculateDFPTPhonons(e,qGroups.parent); }
 	else if(e.pertInfo.solverParams.nIterations)
 	{	//Variational perturbation solver
 		PerturbationSolver ps(e);
@@ -112,5 +145,5 @@ void run(string inputFilename, bool dryRun, bool printDefaults)
 	}
 
 	//Final dump:
-	e.dump(DumpFreq_End, 0);
+	if(qGroups.outputGroup()) e.dump(DumpFreq_End, 0);
 }

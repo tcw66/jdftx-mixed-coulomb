@@ -22,3 +22,8 @@ foreach(targetName ${targetNameList})
 endforeach()
 add_custom_target(aux DEPENDS ${targetNameList})
 
+add_executable(TestDFPT TestDFPT.cpp)
+target_link_libraries(TestDFPT ${LINK_PREFIX} jdftxlib ${LINK_SUFFIX})
+set_JDFTX_flags(TestDFPT OFF)
+add_test(NAME dfptEwaldSolver COMMAND TestDFPT)
+set_tests_properties(dfptEwaldSolver PROPERTIES ENVIRONMENT "OMP_NUM_THREADS=1;OPENBLAS_NUM_THREADS=1")

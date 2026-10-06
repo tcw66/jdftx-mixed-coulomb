@@ -33,3 +33,89 @@ if(Python3_Interpreter_FOUND)
         ${CMAKE_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/defectCoulomb
         ${CMAKE_SOURCE_DIR}/scripts/defectDensityToVscloc)
 endif()
+
+
+
+if(Python3_Interpreter_FOUND)
+    execute_process(COMMAND ${Python3_EXECUTABLE} -c "import numpy"
+        RESULT_VARIABLE NUMPY_STATUS OUTPUT_QUIET ERROR_QUIET)
+    if(NUMPY_STATUS EQUAL 0)
+        add_test(NAME dfptInterpolation COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/testInterpolation.py
+            ${CMAKE_SOURCE_DIR}/scripts/phononDFPT)
+    endif()
+endif()
+
+# Enable the physical regression when the SG15 norm-conserving library is available.
+find_file(DFPT_H_PSEUDO H_ONCV_PBE.upf PATHS
+    ${CMAKE_BINARY_DIR}/pseudopotentials/SG15
+    "$ENV{JDFTX_PSEUDO_DIR}/SG15")
+if(Python3_Interpreter_FOUND AND NUMPY_STATUS EQUAL 0 AND DFPT_H_PSEUDO)
+	add_test(NAME dfptElectronPhonon COMMAND ${Python3_EXECUTABLE}
+		${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkElectronPhonon.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_H_PSEUDO})
+	set_tests_properties(dfptElectronPhonon PROPERTIES TIMEOUT 300)
+	if(EnableMPI AND MPIEXEC_EXECUTABLE)
+		add_test(NAME dfptElectronPhononMPI COMMAND ${Python3_EXECUTABLE}
+			${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkElectronPhonon.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_H_PSEUDO}
+			${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG})
+		set_tests_properties(dfptElectronPhononMPI PROPERTIES PROCESSORS 4 TIMEOUT 300)
+	endif()
+	add_test(NAME dfptMetallicFermi COMMAND ${Python3_EXECUTABLE}
+		${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkMetallic.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO})
+	add_test(NAME dfptMetallicGauss COMMAND ${Python3_EXECUTABLE}
+		${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkMetallic.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO} Gauss)
+	set_tests_properties(dfptMetallicFermi dfptMetallicGauss PROPERTIES TIMEOUT 300)
+    add_test(NAME dfptRestart COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkRestart.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_H_PSEUDO})
+    add_test(NAME dfptResponse COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkResponse.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO})
+    add_test(NAME dfptResponseLDA COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkResponse.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO} lda-PZ)
+    if(EnableMPI AND MPIEXEC_EXECUTABLE)
+        add_test(NAME dfptQParallel COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkQParallel.py ${CMAKE_BINARY_DIR}/jdftx
+            ${DFPT_H_PSEUDO} ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG})
+        set_tests_properties(dfptQParallel PROPERTIES PROCESSORS 4 TIMEOUT 180)
+    endif()
+endif()
+
+find_file(DFPT_AL_PSEUDO Al_ONCV_PBE.upf PATHS
+    ${CMAKE_BINARY_DIR}/pseudopotentials/SG15 "$ENV{JDFTX_PSEUDO_DIR}/SG15")
+if(Python3_Interpreter_FOUND AND NUMPY_STATUS EQUAL 0 AND DFPT_AL_PSEUDO)
+    add_test(NAME dfptMetallicAl COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkMetallicAl.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_AL_PSEUDO})
+    set_tests_properties(dfptMetallicAl PROPERTIES TIMEOUT 600)
+    if(EnableMPI AND MPIEXEC_EXECUTABLE)
+        add_test(NAME dfptMetallicAlMPI COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkMetallicAl.py ${CMAKE_BINARY_DIR}/jdftx
+            ${DFPT_AL_PSEUDO} ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG})
+        set_tests_properties(dfptMetallicAlMPI PROPERTIES PROCESSORS 4 TIMEOUT 600)
+    endif()
+endif()
+
+# Silicon exercises nonsymmorphic atom mappings on an anisotropic q grid.
+find_file(DFPT_SI_PSEUDO Si_ONCV_PBE.upf PATHS
+    ${CMAKE_BINARY_DIR}/pseudopotentials/SG15
+    "$ENV{JDFTX_PSEUDO_DIR}/SG15")
+if(Python3_Interpreter_FOUND AND NUMPY_STATUS EQUAL 0 AND DFPT_SI_PSEUDO)
+    add_test(NAME dfptQSymmetry COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkQSymmetry.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_SI_PSEUDO})
+    add_test(NAME dfptAcceleration COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkAcceleration.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_SI_PSEUDO})
+    set_tests_properties(dfptAcceleration PROPERTIES TIMEOUT 300)
+    if(EnableMPI AND MPIEXEC_EXECUTABLE)
+        add_test(NAME dfptAccelerationMPI COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkAcceleration.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_SI_PSEUDO}
+            --launcher ${MPIEXEC_EXECUTABLE} --rank-flag=${MPIEXEC_NUMPROC_FLAG} --ranks 4)
+        set_tests_properties(dfptAccelerationMPI PROPERTIES PROCESSORS 4 TIMEOUT 300)
+    endif()
+endif()
+
+# Hexagonal rotations mix Cartesian directions rather than just permuting them.
+find_file(DFPT_B_PSEUDO B_ONCV_PBE.upf PATHS ${CMAKE_BINARY_DIR}/pseudopotentials/SG15 "$ENV{JDFTX_PSEUDO_DIR}/SG15")
+find_file(DFPT_N_PSEUDO N_ONCV_PBE.upf PATHS ${CMAKE_BINARY_DIR}/pseudopotentials/SG15 "$ENV{JDFTX_PSEUDO_DIR}/SG15")
+if(Python3_Interpreter_FOUND AND NUMPY_STATUS EQUAL 0 AND DFPT_B_PSEUDO AND DFPT_N_PSEUDO)
+    add_test(NAME dfptDisplacementRotations COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkDisplacementRotations.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_B_PSEUDO} ${DFPT_N_PSEUDO})
+    set_tests_properties(dfptDisplacementRotations PROPERTIES TIMEOUT 150)
+endif()

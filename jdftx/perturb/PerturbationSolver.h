@@ -55,7 +55,8 @@ public:
 	
 	void getGrad(std::vector<ColumnBundle> *grad, std::vector<ColumnBundle> Y); //!< Get gradient of E w.r.t Y, used for finite difference tests.
 	
-	void computeIncommensurateWfns(); //!< Automatically set up and minimize incommensurate wfns, not implemented yet
+	void computeIncommensurateWfns(); //!< Compute occupied offset states in the fixed ground-state potential
+	void computeMetallicGroundStates(); //!< Converge also the nearly empty source bands in the frozen SCF potential
 
 	
 	void getdn(ScalarFieldArray& dn, const std::vector<ColumnBundle>* dC, const std::vector<ColumnBundle>* C = 0); //!< Derivative of density w.r.t. wavefunctions
@@ -102,12 +103,27 @@ public:
 	complexScalarField get_nTot(const complexScalarFieldArray n) const { return n.size()==1 ? clone(n[0]) : n[0]+n[1]; }
 
 private:
+	// Smearing DFPT: explicit density-matrix response within the stored bands,
+	// coupled to Sternheimer response in their orthogonal complement.
+	bool metallic() const;
+	void setupMetallicResponse();
+	void metallicProject(std::vector<ColumnBundle>& X) const;
+	ColumnBundle metallicMap(const ColumnBundle& X, int k, int sign) const;
+	void metallicHessian(PerturbationGradient& Av, const PerturbationGradient& v);
+	void metallicSource();
+	std::vector<matrix> metallicWeights;
+	std::vector<diagMatrix> metallicEnergies, metallicSqrtF;
+	double metallicMu=0., metallicDOS=0.;
+	bool metallicReady=false;
+
 	Everything& e;
 	class ElecVars& eVars;
 	ElecInfo& eInfo;
 	IonInfo& iInfo;
 	PerturbationInfo& pInfo;
 };
+
+complexScalarFieldTilde ionicDerivative(const complexScalarFieldTilde& V, const vector3<>& q, const vector3<>& dir);
 
 void init(std::vector<ColumnBundle>& Y, int nbundles, int ncols, const Basis* basis, const ElecInfo* eInfo);
 

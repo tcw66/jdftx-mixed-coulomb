@@ -36,6 +36,9 @@ Symmetries::Symmetries() : symSpherical(lMaxSpherical+1), symSpinAngle(lMaxSpher
 }
 
 void Symmetries::setup(const Everything& everything)
+{ setup(everything,true); }
+
+void Symmetries::setup(const Everything& everything, bool symmetrizeAtoms)
 {	e = &everything;
 	if(mode != SymmetriesNone) logPrintf("\n---------- Setting up symmetries ----------\n");
 
@@ -54,7 +57,7 @@ void Symmetries::setup(const Everything& everything)
 			sym.assign(1, SpaceGroupOp()); 
 	}
 	
-	initAtomMaps(); // Map atoms to symmetry related ones
+	initAtomMaps(symmetrizeAtoms); // Map atoms to symmetry related ones
 }
 
 void Symmetries::setupMesh()
@@ -350,6 +353,12 @@ void Symmetries::printKmap(FILE* fp) const
 		kmapUnpack(kmapEntry, iSrc, invert, iSym);
 		fprintf(fp, "%*lu %2d %+d\n", width, iSrc, iSym, invert);
 	}
+}
+
+void Symmetries::getKpointMap(size_t destination,size_t& source,int& invert,int& iSym) const
+{
+	assert(destination<kmap.size());
+	kmapUnpack(kmap[destination],source,invert,iSym);
 }
 
 matrix Symmetries::getSpinorRotation(const matrix3<>& rot)
@@ -688,7 +697,7 @@ void Symmetries::checkSymmetries()
 	}
 }
 
-void Symmetries::initAtomMaps()
+void Symmetries::initAtomMaps(bool symmetrizeAtoms)
 {	const IonInfo& iInfo = e->iInfo;
 	if(shouldPrintMatrices) logPrintf("\nMapping of atoms according to symmetries:\n");
 	atomMap.resize(iInfo.species.size());
@@ -728,13 +737,13 @@ void Symmetries::initAtomMaps()
 		
 		//Symmetrize atoms:
 		for(size_t a=0; a<spInfo.atpos.size(); a++)
-		{	((IonInfo&)e->iInfo).species[sp]->atpos[a] += datpos[a];
+		{	if(symmetrizeAtoms) ((IonInfo&)e->iInfo).species[sp]->atpos[a] += datpos[a];
 			datposSqSum += (e->gInfo.R * datpos[a]).length_squared();
 			nAtomsTot++;
 		}
 	}
 	
 	//Print atom symmetrization statistics:
-	logPrintf("Applied RMS atom displacement %lg bohrs to make symmetries exact.\n", sqrt(datposSqSum/nAtomsTot));
+	if(symmetrizeAtoms) logPrintf("Applied RMS atom displacement %lg bohrs to make symmetries exact.\n", sqrt(datposSqSum/nAtomsTot));
 	logFlush();
 }

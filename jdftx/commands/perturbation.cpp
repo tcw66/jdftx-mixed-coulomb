@@ -18,6 +18,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 -------------------------------------------------------------------*/
 
 #include <commands/minimize.h>
+#include <climits>
 
 //An enum entry for each configurable option of MinimizeParams
 enum VPTParamsMember
@@ -76,7 +77,10 @@ struct CommandPerturbMinimize : public Command
 				case VPTp_residualDiffThreshold: pl.get(p.residualDiffThreshold, 1e-4, "residualDiffThreshold", true); break;
 				case VPTp_CGBypass: pl.get(p.CGBypass, false, boolMap, "CGBypass", true); break;
 				case VPTp_recomputeResidual: pl.get(p.recomputeResidual, false, boolMap, "recomputeResidual", true); break;
-				case VPTp_Delim: return; //end of input
+				case VPTp_Delim:
+					if(p.nIterations<0 || !(p.residualTol>0.) || !(p.residualDiffThreshold>=0.))
+						throw string("Require nIterations >= 0, residualTol > 0 and residualDiffThreshold >= 0");
+					return; //end of input
 			}
 		}
 	}
@@ -233,8 +237,8 @@ struct CommandPerturbIncommensurateWavefunctions : public Command
 	{
 		format = "<filename> [<EcutOld>]";
 		comments =
-			"Incommensurate perturbations (nonzero phase as specified by set-pert-phase) require specification\n"
-			"of ground state wavefunctions at wavevectors k+q and k-q for all k-points k and perturbation phase q.\n";
+			"Optionally supply occupied states at k+q and k-q for a finite-q perturbation.\n"
+			"Without this command, offset states are computed automatically in the ground-state potential.\n";
 	}
 
     void process(ParamList& pl, Everything& e)
@@ -266,3 +270,144 @@ struct CommandPerturbTest : public Command
 }
 commandPerturbTest;
 
+
+struct CommandPhononDFPT : public Command
+{
+	CommandPhononDFPT() : Command("phonon-dfpt", "jdftx/Perturb")
+	{
+		format="<Nq0> <Nq1> <Nq2>";
+		comments="Compute primitive-cell DFPT phonons on a Gamma-centered uniform q grid, then Fourier transform\n"
+			"to phononCellMap, phononOmegaSq and phononBasis for interpolation. Also writes phononForceMatrixQ.\n"
+			"Equivalent q points are reconstructed using space-group symmetry and time reversal by default.\n"
+			"Requires symmetries none, periodic Coulomb, nonmagnetic scalar states, analytic LDA/GGA,\n"
+			"and nonrelativistic norm-conserving pseudopotentials without nonlinear core corrections.\n"
+			"Use fully occupied bands for insulators; metals require Fermi or Gauss smearing at fixed electron number,\n"
+			"with enough empty bands that the highest-band occupation is below 1e-6 at k and k+/-q.\n"
+			"Set perturb-minimize nIterations and residualTol explicitly. No offset wavefunction files are needed.";
+		forbid("perturb-ion"); forbid("perturb-Vexternal"); forbid("perturb-rhoExternal");
+		forbid("perturb-electric-field"); forbid("perturb-wavevector"); forbid("perturb-incommensurate-wavefunctions");
+	}
+	void process(ParamList& pl,Everything& e)
+	{
+		for(int j=0;j<3;j++) {
+			pl.get(e.pertInfo.phononGrid[j],0,"q-grid dimension",true);
+			if(e.pertInfo.phononGrid[j]<=0) throw string("q-grid dimensions must be positive");
+		}
+		long long count=1;
+		for(int j=0;j<3;j++) {
+			count*=e.pertInfo.phononGrid[j];
+			if(count>INT_MAX) throw string("q-grid is too large");
+		}
+	}
+	void printStatus(Everything& e,int iRep)
+	{ for(int j=0;j<3;j++) logPrintf("%d ",e.pertInfo.phononGrid[j]); }
+} commandPhononDFPT;
+
+struct CommandPhononDFPTElectronPhonon : public Command
+{
+	CommandPhononDFPTElectronPhonon() : Command("phonon-dfpt-electron-phonon", "jdftx/Perturb")
+	{
+		format="<yes|no>";
+		comments="Export screened Cartesian electron-phonon Hamiltonian derivatives (default no).\n"
+			"Writes phononEphQ000000 etc. and text .meta files, in Hartree/bohr, for all stored electronic bands.\n"
+			"Use scripts/electronPhononDFPT to obtain mode-resolved matrix elements in meV.\n"
+			"This export explicitly solves all q points and displacements, overriding their symmetry reductions.\n"
+			"Offset-state reuse, symmetry-reduced SCF restarts and MPI q groups remain available.\n"
+			"To include conduction bands, use Fermi/Gauss smearing and enough elec-n-bands in SCF and DFPT.";
+		require("phonon-dfpt");
+	}
+	void process(ParamList& pl,Everything& e)
+	{ pl.get(e.pertInfo.phononElectronPhonon,false,boolMap,"export electron-phonon matrices",true); }
+	void printStatus(Everything& e,int iRep)
+	{ logPrintf("%s",boolMap.getString(e.pertInfo.phononElectronPhonon)); }
+} commandPhononDFPTElectronPhonon;
+
+struct CommandPhononDFPTSymmetries : public Command
+{
+	CommandPhononDFPTSymmetries() : Command("phonon-dfpt-symmetries", "jdftx/Perturb")
+	{
+		format="<yes|no>";
+		comments="Use space-group symmetry and time reversal to reduce phonon q points (default yes).\n"
+			"Only operations preserving the q grid, full electronic k mesh, FFT mesh and ground-state potential are used.\n"
+			"Electronic symmetries must still be none. Displacement reduction uses these operations too.\n"
+			"Set phonon-dfpt-displacement-symmetries no to retain all Cartesian displacement solves.";
+		require("phonon-dfpt");
+	}
+	void process(ParamList& pl,Everything& e)
+	{ pl.get(e.pertInfo.phononUseSymmetry,true,boolMap,"use q symmetry",true); }
+	void printStatus(Everything& e,int iRep)
+	{ logPrintf("%s",boolMap.getString(e.pertInfo.phononUseSymmetry)); }
+} commandPhononDFPTSymmetries;
+
+struct CommandPhononDFPTQGroups : public Command
+{
+	CommandPhononDFPTQGroups() : Command("phonon-dfpt-q-groups", "jdftx/Perturb")
+	{
+		format="<nGroups>";
+		comments="Split MPI ranks into independent groups which solve different representative phonon q points.\n"
+			"Within each group, electronic k points remain distributed over its ranks. Default: 1 group.\n"
+			"Each group initializes and polishes its own full ground state; final phonon outputs are written once.\n"
+			"Use no more groups than ranks, and preferably no more than the number of representative q points.";
+		require("phonon-dfpt");
+	}
+	void process(ParamList& pl,Everything& e)
+	{
+		pl.get(e.pertInfo.phononQGroups,1,"number of q groups",true);
+		if(e.pertInfo.phononQGroups<1) throw string("number of q groups must be positive");
+	}
+	void printStatus(Everything& e,int iRep)
+	{ logPrintf("%d",e.pertInfo.phononQGroups); }
+} commandPhononDFPTQGroups;
+
+struct CommandPhononDFPTDisplacements : public Command
+{
+	CommandPhononDFPTDisplacements() : Command("phonon-dfpt-displacement-symmetries", "jdftx/Perturb")
+	{
+		format="<yes|no>";
+		comments="Reduce independent atomic displacement responses using the little group of each q (default yes).\n"
+			"Includes Cartesian rotations, atom permutations, cell phases and time reversal.\n"
+			"Set no to calculate every Cartesian displacement explicitly for validation.";
+		require("phonon-dfpt");
+	}
+	void process(ParamList& pl,Everything& e)
+	{ pl.get(e.pertInfo.phononReduceDisplacements,true,boolMap,"reduce displacements",true); }
+	void printStatus(Everything& e,int iRep)
+	{ logPrintf("%s",boolMap.getString(e.pertInfo.phononReduceDisplacements)); }
+} commandPhononDFPTDisplacements;
+
+struct CommandPhononDFPTReuseStates : public Command
+{
+	CommandPhononDFPTReuseStates() : Command("phonon-dfpt-reuse-offset-states", "jdftx/Perturb")
+	{
+		format="<yes|no>";
+		comments="Reuse ground-state occupied wavefunctions for k+q and k-q on the electronic mesh (default yes).\n"
+			"Checks the Hamiltonian residual and refines states when necessary; off-mesh states use the offset eigensolver.";
+		require("phonon-dfpt");
+	}
+	void process(ParamList& pl,Everything& e)
+	{ pl.get(e.pertInfo.phononReuseOffsetStates,true,boolMap,"reuse offset states",true); }
+	void printStatus(Everything& e,int iRep)
+	{ logPrintf("%s",boolMap.getString(e.pertInfo.phononReuseOffsetStates)); }
+} commandPhononDFPTReuseStates;
+
+struct CommandPhononDFPTInitialState : public Command
+{
+	CommandPhononDFPTInitialState() : Command("phonon-dfpt-initial-state", "jdftx/Perturb")
+	{
+		format="<scf-input> <state-pattern>";
+		comments="Expand a symmetry-reduced ground-state checkpoint onto the full DFPT electronic mesh.\n"
+			"scf-input specifies the geometry, pseudopotentials, basis and symmetries used to write the checkpoint.\n"
+			"state-pattern must contain $VAR, e.g. scf.$VAR; wavefunctions and fillings are read.\n"
+			"Both calculations must have identical geometry, cutoff, bands, smearing and compatible k meshes.\n"
+			"The DFPT input still uses symmetries none. No full-BZ SCF calculation is required.";
+		require("phonon-dfpt"); forbid("initial-state"); forbid("wavefunction"); forbid("elec-initial-fillings");
+	}
+	void process(ParamList& pl,Everything& e)
+	{
+		pl.get(e.pertInfo.phononInitialInput,string(),"SCF input",true);
+		pl.get(e.pertInfo.phononInitialState,string(),"state pattern",true);
+		if(e.pertInfo.phononInitialState.find("$VAR")==string::npos) throw string("state pattern must contain $VAR");
+	}
+	void printStatus(Everything& e,int iRep)
+	{ logPrintf("%s %s",e.pertInfo.phononInitialInput.c_str(),e.pertInfo.phononInitialState.c_str()); }
+} commandPhononDFPTInitialState;

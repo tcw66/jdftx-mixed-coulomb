@@ -150,6 +150,7 @@ MPIUtil* mpiWorld = 0;
 MPIUtil* mpiGroup = 0;
 MPIUtil* mpiGroupHead = 0;
 MPIUtil* mpiWorldFull = 0;
+const MPIUtil* mpiAbortComm = 0;
 bool mpiDebugLog = false;
 bool manualThreadCount = false;
 size_t mempoolSize = 0;

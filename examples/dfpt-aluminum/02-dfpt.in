@@ -1,0 +1,11 @@
+include common.in
+symmetries none
+phonon-dfpt-initial-state 01-scf.in scf.$VAR
+perturb-minimize nIterations 500 algorithm MINRES \
+    residualTol 1e-7 residualDiffThreshold 0
+phonon-dfpt 4 4 4
+phonon-dfpt-symmetries yes
+phonon-dfpt-displacement-symmetries yes
+phonon-dfpt-reuse-offset-states yes
+dump-name phonon.$VAR
+dump End None

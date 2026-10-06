@@ -155,6 +155,10 @@ public:
 	void updateLocal(ScalarFieldTilde& Vlocps, ScalarFieldTilde& rhoIon, ScalarFieldTilde& nChargeball,
 		ScalarFieldTilde& nCore, ScalarFieldTilde& tauCore, int atom = -1) const; 
 	
+	//! Periodic part of local ionic potential at G+q, including the Coulomb tail.
+	complexScalarFieldTilde getLocalPotential(const vector3<>& q, int atom) const;
+	bool hasCoreDensity() const { return bool(nCoreRadial) || bool(tauCoreRadial); }
+
 	//! Return the local forces (due to Vlocps, rhoIon, nChargeball and nCore/tauCore)
 	std::vector< vector3<> > getLocalForces(const ScalarFieldTilde& ccgrad_Vlocps, const ScalarFieldTilde& ccgrad_rhoIon,
 		const ScalarFieldTilde& ccgrad_nChargeball, const ScalarFieldTilde& ccgrad_nCore, const ScalarFieldTilde& ccgrad_tauCore) const;

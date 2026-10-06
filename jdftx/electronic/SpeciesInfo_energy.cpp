@@ -370,3 +370,24 @@ ColumnBundle SpeciesInfo::getVatom(const ColumnBundle& Cq, int atom) const
 			}
 	return V;
 }
+
+
+complexScalarFieldTilde SpeciesInfo::getLocalPotential(const vector3<>& q, int atom) const
+{
+	assert(atom >= 0 && atom < int(atpos.size()));
+	const GridInfo& g = e->gInfo;
+	complexScalarFieldTilde result = complexScalarFieldTildeData::alloc(g);
+	complex* data = result->data();
+	for(int ix=0; ix<g.S[0]; ix++)
+	for(int iy=0; iy<g.S[1]; iy++)
+	for(int iz=0; iz<g.S[2]; iz++)
+	{
+		vector3<int> iG(ix,iy,iz);
+		for(int j=0; j<3; j++) if(2*iG[j]>g.S[j]) iG[j]-=g.S[j];
+		vector3<> K = iG + q;
+		double Ksq = g.GGT.metric_length_squared(K);
+		double potential = VlocRadial(sqrt(Ksq)) - (Ksq ? 4*M_PI*Z/Ksq : 0.);
+		data[g.fullGindex(iG)] = (potential/g.detR)*cis(-2*M_PI*dot(K,atpos[atom]));
+	}
+	return result;
+}

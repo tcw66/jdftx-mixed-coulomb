@@ -1,0 +1,17 @@
+# Diamond silicon primitive cell; fresh checkpoints are required for these bands.
+lattice face-centered Cubic 10.26
+coords-type lattice
+ion-species /home/tyler/apps/jdftx_defect_coulomb/build/pseudopotentials/SG15/Si_ONCV_PBE.upf
+ion Si 0 0 0 1
+ion Si 0.25 0.25 0.25 1
+coulomb-interaction periodic
+spintype no-spin
+elec-ex-corr gga-PBE
+elec-cutoff 30
+kpoint-folding 4 4 4
+# Include conduction bands; converge band count, width, cutoff and meshes.
+elec-smearing Fermi 0.005
+elec-n-bands 12
+electronic-minimize nIterations 500 energyDiffThreshold 1e-13
+electronic-scf nIterations 200 nEigSteps 30 \
+    energyDiffThreshold 0 eigDiffThreshold 0 residualThreshold 1e-10 mixFraction 0.4

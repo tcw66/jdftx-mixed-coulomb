@@ -44,6 +44,7 @@ extern MPIUtil* mpiWorld; //!< MPI across all processes used in run (could be < 
 extern MPIUtil* mpiGroup; //!< MPI within current group of processes
 extern MPIUtil* mpiGroupHead; //!< MPI across equal ranks in each group
 extern MPIUtil* mpiWorldFull; //!< Actual MPI_COMM_WORLD used for smart resource division (relevant in library mode)
+extern const MPIUtil* mpiAbortComm; //!< Parent communicator to abort during independent grouped calculations
 extern bool mpiDebugLog; //!< If true, all processes output to seperate debug log files, otherwise only head process outputs (set before calling initSystem())
 class Everything; //!< global forward declaration for auxiliary headers that don't need details within Everything
 
@@ -136,6 +137,7 @@ void logResume(); //!< re-enable logging after a logSuspend() call
 	{	fprintf(globalLog, __VA_ARGS__); \
 		if(mpiWorld->isHead() && globalLog != stdout) \
 			fprintf(stderr, __VA_ARGS__); \
+		if(mpiAbortComm) mpiAbortComm->exit(1); \
 		finalizeSystem(false); \
 		exit(1); \
 	}
@@ -146,7 +148,7 @@ void logResume(); //!< re-enable logging after a logSuspend() call
 		fflush(globalLog); \
 		if(mpiWorld->isHead() && globalLog != stdout) \
 			fprintf(stderr, __VA_ARGS__); \
-		mpiWorld->exit(1); \
+		(mpiAbortComm ? mpiAbortComm : mpiWorld)->exit(1); \
 	}
 
 //--------------- Citations --------------------

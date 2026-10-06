@@ -1,0 +1,10 @@
+include common.in
+
+# Converge the SCF density residual, rather than stopping on energy alone.
+electronic-minimize nIterations 500 energyDiffThreshold 1e-13
+electronic-scf nIterations 200 nEigSteps 0 \
+    energyDiffThreshold 0 eigDiffThreshold 0 residualThreshold 1e-10 \
+    mixFraction 0.4
+
+dump-name scf.$VAR
+dump End State Fillings BandEigs Forces

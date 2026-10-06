@@ -4,3 +4,14 @@
 __pycache__/
 *.py[cod]
 .ipynb_checkpoints/
+
+# Example calculation outputs; keep inputs, scripts and q-path definitions.
+/examples/**/*.out
+/examples/**/*.wfns
+/examples/**/*.fillings
+/examples/**/*.eigenvals
+/examples/**/*.force
+/examples/**/*.phonon*
+/examples/**/*.npz
+/examples/**/results*/
+/examples/**/electron-phonon/
