@@ -23,6 +23,17 @@ int main(int argc,char** argv)
 {
 	initSystem(argc,argv);
 	{
+		// Alternating cheap/expensive q points defeat round-robin assignment.
+		std::vector<double> costs{1.,9.,1.,9.};
+		auto groups=balanceDFPTQGroups(costs,{1,1});
+		std::vector<double> load(2,0.);
+		for(size_t i=0;i<costs.size();i++) load[groups[i]]+=costs[i];
+		require(load[0]==10. && load[1]==10.,"q group cost balancing");
+		require(groups==balanceDFPTQGroups(costs,{1,1}),"deterministic q group schedule");
+		groups=balanceDFPTQGroups({9.,1.},{1,2,1});
+		require(groups[0]==1,"q scheduler respects unequal group sizes");
+		require(balanceDFPTQGroups({}, {1,1}).empty(),"empty q schedule");
+		require(balanceDFPTQGroups({1.}, {1,1,1}).size()==1,"idle q groups");
 		// An anisotropic FCC cell welds coincident vertices into self-loop
 		// edges. Repeat with varying allocation order to catch stale iterators.
 		for(int repeat=0;repeat<24;repeat++) {

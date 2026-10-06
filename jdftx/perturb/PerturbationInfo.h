@@ -113,6 +113,13 @@ public:
 	bool phononElectronPhonon = false; //!< Export screened Bloch Hamiltonian derivatives at every q and displacement
 	string phononInitialInput, phononInitialState; //!< Input and state pattern of a symmetry-reduced SCF restart
 	int phononQGroups = 1; //!< Independent MPI groups for representative q points
+	bool phononCache = true; //!< Reuse frozen-ground-state and bare perturbation data within each q
+	double phononSourceCacheMiB = 128.; //!< Maximum retained source-vector storage per MPI rank
+	bool phononBalanceQGroups = true; //!< Assign representative q points by estimated work
+	bool phononReduceK = false; //!< Reduce electronic response using symmetries of each displacement
+	bool phononNestedSolver = false; //!< Fixed-potential inner response solves with outer potential mixing
+	double phononMixFraction = 0.4;
+	int phononMixHistory = 8, phononMixIterations = 80;
 	double lastResponseResidual = 0.; //!< Residual of the most recent completed response
 	bool testing = false; //!< Whether or not a FD test is being conducted
 	SolverParams solverParams; //!< solver parameters

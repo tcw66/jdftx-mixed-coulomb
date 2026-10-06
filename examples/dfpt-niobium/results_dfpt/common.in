@@ -1,0 +1,19 @@
+include Nb.lattice
+include Nb.ionpos
+
+ion-species /home/tyler/apps/jdftx_defect_coulomb/build/pseudopotentials/SG15/Nb_ONCV_PBE.upf
+coulomb-interaction periodic
+spintype no-spin
+elec-ex-corr gga-PBE
+elec-cutoff 30
+kpoint-folding 12 12 12
+
+# Partially occupied and empty bands must be identical in SCF and DFPT.
+elec-smearing Fermi 0.01
+elec-n-bands 14
+electronic-minimize nIterations 500 energyDiffThreshold 1e-13
+electronic-scf nIterations 200 nEigSteps 30 \
+    energyDiffThreshold 0 eigDiffThreshold 0 residualThreshold 1e-10 \
+    mixFraction 0.4
+
+converge-empty-states yes

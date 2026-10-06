@@ -93,6 +93,7 @@ Complete examples are provided for:
 | --- | --- |
 | [Silicon phonons](examples/dfpt-silicon/README.md) | Insulating SCF, coarse q mesh, interpolated dispersion, checks and plots |
 | [Aluminum phonons](examples/dfpt-aluminum/README.md) | Symmetry-reduced SCF and metallic DFPT with empty bands |
+| [BCC niobium input](examples/dfpt-niobium/results_dfpt/02-dfpt.in) | Metallic DFPT with response k-point reduction, nested solves and a standalone BCC dispersion plotter |
 | [Silicon electron–phonon coupling](examples/dfpt-silicon-electron-phonon/README.md) | Fresh SCF including conduction bands, screened derivatives and mode couplings |
 
 For example, from the repository root:
@@ -106,7 +107,7 @@ The silicon runner accepts `--jdftx-bin ./build-gpu/jdftx_gpu`, `--pseudo`,
 NumPy are required for interpolation; Matplotlib is needed for plots. Example
 parameters are starting values for convergence studies.
 
-### Symmetry and parallelism
+### Symmetry, response solvers and parallelism
 
 These optimizations are enabled by default for phonon-only calculations:
 
@@ -114,6 +115,9 @@ These optimizations are enabled by default for phonon-only calculations:
 phonon-dfpt-symmetries yes
 phonon-dfpt-displacement-symmetries yes
 phonon-dfpt-reuse-offset-states yes
+phonon-dfpt-cache yes
+phonon-dfpt-source-cache-size 128
+phonon-dfpt-balance-q-groups yes
 ```
 
 Compatible space-group operations and time reversal reduce the q mesh. The
@@ -121,10 +125,48 @@ little group of each representative q reduces independent displacement solves,
 including Cartesian rotations, atom permutations and cell phases. Offset states
 are reused when k±q lies on the electronic mesh; otherwise a frozen-potential
 eigensolver generates them. Offset Hamiltonian residuals and response convergence
-are checked. Set the corresponding option to `no` for explicit comparisons.
+are checked. Set the symmetry or offset-reuse option to `no` for explicit
+comparisons.
 
-Electronic symmetries in the DFPT input must remain `none`: each response uses
-the full electronic mesh even when the initial SCF was symmetry reduced.
+Electronic symmetries in the DFPT input must remain `none`. Ground-state and
+offset-state setup use the full electronic mesh even when the initial SCF was
+symmetry reduced. Enable `phonon-dfpt-k-symmetries yes` to reduce the electronic
+**response** mesh for each displacement (default `no`). This uses operations
+without translations that preserve q exactly, fix the displaced atom without a
+cell shift, and map its direction to itself or its negative. Response densities
+are symmetry averaged; full-mesh responses are reconstructed with band sewing
+matrices before force contractions, including degenerate electronic subspaces.
+Other operations retain the full response mesh. Setting
+`phonon-dfpt-symmetries no` also disables electronic response reduction.
+
+The QE-style nested solver is selected separately:
+
+```text
+phonon-dfpt-k-symmetries yes
+phonon-dfpt-solver nested
+phonon-dfpt-mixing 0.4 8 80
+```
+
+Nested iteration fixes the response potential during inner Sternheimer solves
+and mixes the induced potential using a regularized DIIS history. Independent
+band CG uses kinetic preconditioning and removes converged bands from subsequent
+Hamiltonian calls. Inner accuracy tightens with the coupled residual, and each
+outer iteration reuses the previous response through a correction solve.
+Nonpositive curvature or an inner iteration limit triggers MINRES. The three
+mixing arguments are the fraction, history length and outer iteration limit;
+`0.4 8 80` are their defaults. Both solver paths verify the coupled response
+residual and fixed-electron-number Gamma constraint. The default solver remains
+`coupled`: nested iteration can be slower, so compare timings for the intended
+material and mesh. The [Nb input](examples/dfpt-niobium/results_dfpt/02-dfpt.in)
+enables the nested path and k-point reduction explicitly.
+
+Frozen-ground-state XC derivatives and bare displacement potentials are reused
+within each representative q. Source vectors are retained for force contractions
+where applicable, with at most 128 MiB of additional retained storage per MPI
+rank by default. `phonon-dfpt-source-cache-size 0` disables source-vector storage
+while keeping the potential and XC caches; `phonon-dfpt-cache no` disables these
+caches for comparison. Cache entries are released after each q.
+
 Normally MPI distributes k points while q and displacement solves are sequential.
 Add `phonon-dfpt-q-groups 2` to divide ranks between two independent q groups:
 
@@ -142,6 +184,28 @@ ranks, and preferably no more than the number of independent q points. CPU
 threads and CUDA accelerate local operations. Displacements remain sequential
 within each group. Completed q responses are not currently saved for restarting
 an interrupted grid calculation.
+
+Q groups receive representative q points by estimated work, using displacement
+counts, off-mesh offset-state work and group sizes. Unequal group sizes are
+supported, and all displacements at a q stay together to retain its caches.
+`phonon-dfpt-balance-q-groups no` restores round-robin assignment. The default
+is one group; balancing takes effect when multiple groups are requested.
+
+Measured Nb regression timings for the coupled solver show the effect of
+electronic response reduction alone:
+
+| Build | Electronic k mesh | Full response mesh | Reduced response mesh | Force-matrix relative difference |
+| --- | --- | --- | --- | --- |
+| CPU, one rank/thread | 4 × 4 × 4 | 116.6 s | 54.2 s | 7.1 × 10⁻⁹ |
+| CUDA, one RTX 4090 | 2 × 2 × 2 | 29.4 s | 19.1 s | 6.3 × 10⁻⁹ |
+
+These are complete DFPT run times using a 2 × 2 × 2 q mesh, 14 bands, an 8-Hartree
+cutoff and Fermi smearing of 0.01 Hartree. Displacement reduction was disabled
+to isolate electronic k reduction. These small regression settings establish
+numerical equivalence; they are not converged production parameters. Timings
+depend on the mesh and hardware, and CPU/CUDA rows use different electronic
+meshes. [The validation script](jdftx/test/dfpt/checkFrozenCache.py) compares
+full-mesh, k-reduced, nested and combined calculations and records their timings.
 
 ### Metals and supported scope
 
@@ -198,6 +262,18 @@ units and eigenvectors. Phonon energies in meV are
 `sign(omega_squared) * sqrt(abs(omega_squared)) * 27211.386245988`.
 Interpolation operates on the lattice-space matrices before diagonalization.
 
+For BCC Nb, the standalone plotter reads the same `phonon.*` matrix inputs and
+the adjacent `Nb.lattice`, generates the Γ–H–N–Γ–P–H | P–N path, and writes PNG/PDF
+plots and dispersion tables in meV. Run it from the repository root after DFPT:
+
+```bash
+python3 examples/dfpt-niobium/results_dfpt/plot_dispersion.py
+```
+
+Output goes to `results_dispersion` beside the plotter. Use `--dfpt` and `--fd`
+to compare calculation directories, or `--metadata` to reuse existing q-path
+files. NumPy and Matplotlib are required.
+
 ## Electron–phonon matrix elements
 
 Add the following to a DFPT phonon input:
@@ -216,7 +292,8 @@ identical in DFPT; the existing four-band silicon checkpoints cannot supply
 extra conduction states.
 
 Electron–phonon export currently solves every q and Cartesian displacement
-explicitly, overriding both phonon symmetry reductions. Offset reuse,
+on the full electronic response mesh, overriding q, displacement and electronic
+response symmetry reductions. Offset reuse,
 symmetry-reduced SCF unfolding and MPI q groups remain available. Storage for
 the raw matrices is `16 * Nq * Nk * (3 * Natoms) * Nbands²` bytes plus metadata.
 This option can substantially increase work compared with phonon-only runs.
@@ -308,7 +385,14 @@ pseudopotentials are available; MPI checks additionally require an MPI-enabled
 build and launcher. Coverage includes analytic ionic Ewald derivatives,
 finite-q response against independently relaxed supercell forces, Fourier
 interpolation, symmetry reconstruction, offset reuse, reduced-SCF restarts,
-metallic Fermi/Gauss response, and MPI q groups. Electron–phonon tests compare
+metallic Fermi/Gauss response, and MPI q groups. `dfptMainSpeedups` and
+`dfptMainSpeedupsNb` compare full-mesh coupled, k-reduced, nested and combined
+response calculations; `dfptMainSpeedupsNbMPI` also checks unequal MPI groups
+and Gamma charge conservation. `dfptKSymmetryNbDense` tests a 64-point Nb mesh
+with truncated degenerate empty-band subspaces. `dfptFrozenCache` and its Nb/MPI
+variants check cache budgets and cached/uncached force matrices. Performance
+tests record timings without requiring a speedup on every machine.
+Electron–phonon tests compare
 screened diagonal band derivatives with independent SCF finite differences,
 check q/−q reciprocity and mass/frequency normalization, exercise off-mesh target
 states, and compare complete-band-subspace coupling norms across MPI q groups.

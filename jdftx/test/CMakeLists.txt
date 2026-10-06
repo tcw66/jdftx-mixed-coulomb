@@ -103,11 +103,47 @@ if(Python3_Interpreter_FOUND AND NUMPY_STATUS EQUAL 0 AND DFPT_SI_PSEUDO)
     add_test(NAME dfptAcceleration COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkAcceleration.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_SI_PSEUDO})
     set_tests_properties(dfptAcceleration PROPERTIES TIMEOUT 300)
+    add_test(NAME dfptFrozenCache COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkFrozenCache.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_SI_PSEUDO})
+    set_tests_properties(dfptFrozenCache PROPERTIES TIMEOUT 300)
+    add_test(NAME dfptMainSpeedups COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkFrozenCache.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_SI_PSEUDO}
+        --main-speedups)
+    set_tests_properties(dfptMainSpeedups PROPERTIES TIMEOUT 400)
     if(EnableMPI AND MPIEXEC_EXECUTABLE)
         add_test(NAME dfptAccelerationMPI COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkAcceleration.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_SI_PSEUDO}
             --launcher ${MPIEXEC_EXECUTABLE} --rank-flag=${MPIEXEC_NUMPROC_FLAG} --ranks 4)
         set_tests_properties(dfptAccelerationMPI PROPERTIES PROCESSORS 4 TIMEOUT 300)
+    endif()
+endif()
+
+find_file(DFPT_NB_PSEUDO Nb_ONCV_PBE.upf PATHS
+    ${CMAKE_BINARY_DIR}/pseudopotentials/SG15 "$ENV{JDFTX_PSEUDO_DIR}/SG15")
+if(Python3_Interpreter_FOUND AND NUMPY_STATUS EQUAL 0 AND DFPT_NB_PSEUDO)
+    add_test(NAME dfptFrozenCacheNb COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkFrozenCache.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_NB_PSEUDO} --species Nb)
+    set_tests_properties(dfptFrozenCacheNb PROPERTIES TIMEOUT 300)
+    add_test(NAME dfptMainSpeedupsNb COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkFrozenCache.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_NB_PSEUDO}
+        --species Nb --main-speedups)
+    set_tests_properties(dfptMainSpeedupsNb PROPERTIES TIMEOUT 400)
+    # The 64-point mesh cuts a degenerate empty manifold at some k points:
+    # physical responses, rather than projector-dependent solver variables,
+    # must be transformed between electronic symmetry images.
+    add_test(NAME dfptKSymmetryNbDense COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkFrozenCache.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_NB_PSEUDO}
+        --species Nb --main-speedups --k-only --fold 4)
+    set_tests_properties(dfptKSymmetryNbDense PROPERTIES TIMEOUT 400)
+    if(EnableMPI AND MPIEXEC_EXECUTABLE)
+        add_test(NAME dfptFrozenCacheNbMPI COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkFrozenCache.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_NB_PSEUDO}
+            --species Nb --launcher ${MPIEXEC_EXECUTABLE} --rank-flag=${MPIEXEC_NUMPROC_FLAG})
+        set_tests_properties(dfptFrozenCacheNbMPI PROPERTIES PROCESSORS 3 TIMEOUT 400)
+        add_test(NAME dfptMainSpeedupsNbMPI COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkFrozenCache.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_NB_PSEUDO}
+            --species Nb --main-speedups --launcher ${MPIEXEC_EXECUTABLE} --rank-flag=${MPIEXEC_NUMPROC_FLAG})
+        set_tests_properties(dfptMainSpeedupsNbMPI PROPERTIES PROCESSORS 3 TIMEOUT 500)
     endif()
 endif()
 

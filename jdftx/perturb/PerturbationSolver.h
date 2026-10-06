@@ -24,6 +24,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include <core/ScalarFieldArray.h>
 #include <electronic/ColumnBundle.h>
 #include <perturb/LinearSolver.h>
+#include <map>
 
 struct PerturbationGradient {
 	std::vector<ColumnBundle> X; //!< First order change in unnormalized wfns
@@ -50,6 +51,9 @@ public:
 	void precondition(PerturbationGradient& v) override;
 	void Ksqrt(PerturbationGradient& v) override;
 	void solvePerturbation();
+	void reportPhononCache() const; //!< Log per-q cache usage on the group head
+	void setResponseSymmetries(const std::vector<SpaceGroupOp>& operations);
+	complex forceResponse(); //!< Contract the current response with the selected displacement
 	
 	void calcdGradTau(); //!< Get derivative of Grad E w.r.t. external perturbations (local potential, charge density, or atomic position)
 	
@@ -103,6 +107,35 @@ public:
 	complexScalarField get_nTot(const complexScalarFieldArray n) const { return n.size()==1 ? clone(n[0]) : n[0]+n[1]; }
 
 private:
+	bool screeningEnabled=true;
+	void solveNestedResponse();
+	PerturbationGradient screeningSource(const complexScalarFieldArray& potential);
+	bool solveIndependentBands(const PerturbationGradient& rhs,const SolverParams& parameters);
+	ColumnBundle bareBandOperator(const ColumnBundle& X,int k,const std::vector<int>& bands);
+	ColumnBundle bareBandPrecondition(const ColumnBundle& X,int k,int sign);
+	std::vector<SpaceGroupOp> responseSymmetries, kSymmetries;
+	std::vector<double> kCharacters, responseWeights;
+	std::vector<int> kRepresentatives, kOperations;
+	std::vector<std::vector<int>> densitySymmetryMaps;
+	bool kReductionActive=false;
+	bool physicalResponse=false; //!< Full-mesh dC stores the physical metallic response after expansion
+	void prepareKReduction();
+	void expandKResponse();
+	void symmetrizeResponseDensity(complexScalarFieldArray& density) const;
+	double responseWeight(int k) const;
+	bool activeResponse(int k) const { return responseWeight(k)>0.; }
+	// The phonon driver creates one solver per q and keeps the ground state
+	// fixed across its displacement solves. Other callers always refresh data.
+	bool groundCachesReady=false;
+	const class AtomPerturbation* barePotentialAtom=nullptr;
+	vector3<> barePotentialQ;
+	complexScalarFieldArray barePotentialPlus, barePotentialMinus;
+	bool barePotentialReady=false;
+	std::map<const class AtomPerturbation*, PerturbationGradient> sourceCache;
+	size_t sourceCacheBytes=0;
+	int sourceCacheHits=0,sourceBuilds=0,barePotentialBuilds=0;
+	void cacheSource();
+	bool usePhononCache() const;
 	// Smearing DFPT: explicit density-matrix response within the stored bands,
 	// coupled to Sternheimer response in their orthogonal complement.
 	bool metallic() const;

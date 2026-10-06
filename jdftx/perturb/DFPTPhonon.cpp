@@ -520,6 +520,28 @@ void loadSymmetryReducedDFPTState(Everything& e,bool dryRun)
 	e.eVars.isRandom=false; e.eVars.skipWfnsInit=false;
 }
 
+std::vector<int> balanceDFPTQGroups(const std::vector<double>& costs,const std::vector<int>& capacities)
+{
+	if(capacities.empty()) die("DFPT q scheduling requires at least one group.\n");
+	for(int capacity:capacities) if(capacity<=0) die("DFPT q group capacity must be positive.\n");
+	std::vector<size_t> order(costs.size());
+	for(size_t i=0;i<costs.size();i++) {
+		if(!std::isfinite(costs[i]) || costs[i]<=0.) die("DFPT q cost must be finite and positive.\n");
+		order[i]=i;
+	}
+	std::stable_sort(order.begin(),order.end(),[&](size_t a,size_t b) { return costs[a]>costs[b]; });
+	std::vector<double> work(capacities.size(),0.);
+	std::vector<int> groups(costs.size(),0);
+	for(size_t i:order) {
+		size_t best=0;
+		for(size_t group=1;group<capacities.size();group++)
+			if((work[group]+costs[i])/capacities[group] < (work[best]+costs[i])/capacities[best]) best=group;
+		groups[i]=best;
+		work[best]+=costs[i];
+	}
+	return groups;
+}
+
 void calculateDFPTPhonons(Everything& e,const MPIUtil* parent)
 {
 	PerturbationInfo& p=e.pertInfo;
@@ -581,6 +603,9 @@ void calculateDFPTPhonons(Everything& e,const MPIUtil* parent)
 		p.phononReduceDisplacements=false;
 		logPrintf("Electron-phonon export: explicitly solving all q points and Cartesian displacements; offset reuse and MPI q groups retained.\n");
 	}
+	// Fixed-screening equations are independent by source eigenstate. Occupied
+	// insulating subspaces may otherwise retain an arbitrary unitary gauge.
+	if(p.phononNestedSolver && !metallic) e.eVars.setEigenvectors();
 	int nm=modes.size();
 	matrix bare=zeroes(nm,nm);
 	for(int a=0;a<nm;a++) for(int b=0;b<nm;b++)
@@ -622,12 +647,47 @@ void calculateDFPTPhonons(Everything& e,const MPIUtil* parent)
 			iq+1,displacementPlans.back().columns.size(),nm);
 	}
 	logPrintf("DFPT q symmetry reduction: %zu/%d representatives (%d displacement solves).\n",independent.size(),nq,responseOffsets.back());
+	std::vector<int> groupCapacities(nGroups,0);
+	if(mpiWorld->isHead()) groupCapacities[groupIndex]=mpiWorld->nProcesses();
+	if(parent) parent->allReduceData(groupCapacities,MPIUtil::ReduceSum);
+	else groupCapacities[0]=mpiWorld->nProcesses();
+	// Extra ranks beyond the k-point count cannot add k parallelism.
+	for(int& capacity:groupCapacities) capacity=std::min(capacity,e.eInfo.nStates);
+	std::vector<double> costs(independent.size());
+	for(size_t i=0;i<independent.size();i++) {
+		int offMesh=0;
+		const vector3<>& q=qpoints[independent[i]];
+		if(nGroups>1 && p.phononBalanceQGroups)
+		for(const auto& k:e.eInfo.qnums) for(int sign:{-1,1}) {
+			bool onMesh=false;
+			if(p.phononReuseOffsetStates) for(const auto& other:e.eInfo.qnums)
+				if(sameReciprocalPoint(k.k+sign*q,other.k)) { onMesh=true; break; }
+			if(!onMesh) offMesh++;
+		}
+		// A relative heuristic, not a timing prediction: one setup unit,
+		// one unit per response, and two units for a fully off-mesh offset solve.
+		costs[i]=1.+displacementPlans[i].columns.size()+double(offMesh)/e.eInfo.nStates;
+	}
+	std::vector<int> qGroups(independent.size());
+	if(p.phononBalanceQGroups) qGroups=balanceDFPTQGroups(costs,groupCapacities);
+	else for(size_t i=0;i<independent.size();i++) qGroups[i]=i%nGroups;
+	if(nGroups>1) {
+		for(int group=0;group<nGroups;group++) {
+			int representatives=0,solves=0; double work=0.;
+			for(size_t i=0;i<independent.size();i++) if(qGroups[i]==group) {
+				representatives++; solves+=displacementPlans[i].columns.size(); work+=costs[i];
+			}
+			logPrintf("DFPT q group %d/%d assignment: %d representatives, %d responses, estimated work %.3f / capacity %d.\n",
+				group+1,nGroups,representatives,solves,work,groupCapacities[group]);
+		}
+	}
 	if(parent) {
 		// Plans must agree before independent work: otherwise even the length
 		// of the residual gather could differ between q communicators.
 		std::vector<int> signature{nSigns,int(symmetries.size()),int(independent.size()),nm};
 		signature.insert(signature.end(),independent.begin(),independent.end());
 		signature.insert(signature.end(),responseOffsets.begin(),responseOffsets.end());
+		signature.insert(signature.end(),qGroups.begin(),qGroups.end());
 		for(const auto& plan:displacementPlans) signature.insert(signature.end(),plan.columns.begin(),plan.columns.end());
 		for(const auto& sym:symmetries) {
 			for(int i=0;i<3;i++) for(int j=0;j<3;j++) signature.push_back(sym.op.rot(i,j));
@@ -649,12 +709,15 @@ void calculateDFPTPhonons(Everything& e,const MPIUtil* parent)
 	}
 	std::vector<double> residuals(responseOffsets.back(),0.);
 	for(size_t iRepresentative=0;iRepresentative<independent.size();iRepresentative++) {
-		if(int(iRepresentative%nGroups)!=groupIndex) continue;
+		if(qGroups[iRepresentative]!=groupIndex) continue;
 		int iq=independent[iRepresentative];
 		vector3<> q=qpoints[iq];
 		p.qvec=q; p.commensurate=false;
 		p.setup(e,e.eVars);
 		PerturbationSolver solver(e);
+		std::vector<SpaceGroupOp> responseOperations;
+		for(const auto& sym:symmetries) responseOperations.push_back(sym.op);
+		solver.setResponseSymmetries(responseOperations);
 		std::unique_ptr<ElectronPhononWriter> eph;
 		matrix F=bare+ionicForceMatrix(e.gInfo.R,atoms,q);
 		const auto& plan=displacementPlans[iRepresentative];
@@ -670,16 +733,12 @@ void calculateDFPTPhonons(Everything& e,const MPIUtil* parent)
 			residuals[responseOffsets[iRepresentative]+ia]=p.lastResponseResidual;
 			// Freeze this response: calcdGradTau below does not change dC.
 			for(int b=0;b<nm;b++) {
-				p.datom=modes[b]; solver.calcdGradTau();
-				complex response=0.;
-				for(int state=e.eInfo.qStart;state<e.eInfo.qStop;state++) {
-					response+=dotc(p.dGradTau.X[state],p.dC[state]);
-					response+=conj(dotc(p.dGradTau.X[state+e.eInfo.nStates],p.dC[state+e.eInfo.nStates]));
-				}
-				mpiWorld->allReduce(response,MPIUtil::ReduceSum);
+				p.datom=modes[b];
+				complex response=solver.forceResponse();
 				F.set(b,a,F(b,a)+response);
 			}
 		}
+		solver.reportPhononCache();
 		F=reconstructDisplacements(F,plan);
 		double herm=nrm2(F-dagger(F))/std::max(1e-30,nrm2(F));
 		logPrintf("DFPT force matrix Hermiticity relative error: %.6le\n",herm);

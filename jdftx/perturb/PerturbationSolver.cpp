@@ -119,6 +119,364 @@ PerturbationSolver::PerturbationSolver(Everything& e) : e(e), eVars(e.eVars), eI
 {
 }
 
+void PerturbationSolver::setResponseSymmetries(const std::vector<SpaceGroupOp>& operations)
+{ responseSymmetries=operations; }
+
+double PerturbationSolver::responseWeight(int k) const
+{ return kReductionActive ? responseWeights[k] : eInfo.qnums[k].weight; }
+
+void PerturbationSolver::prepareKReduction()
+{
+	kReductionActive=false;
+	physicalResponse=false;
+	kSymmetries.clear(); kCharacters.clear(); densitySymmetryMaps.clear();
+	if(!pInfo.phononReduceK || !pInfo.phononGrid.isNonzero() || pInfo.commensurate
+		|| !pInfo.datom || pInfo.phononElectronPhonon || pInfo.testing) return;
+	const auto& mode=pInfo.datom->mode;
+	const vector3<>& position=iInfo.species[mode.sp]->atpos[mode.at];
+	const auto& g=e.gInfo;
+	for(const auto& op:responseSymmetries) {
+		// Use one-dimensional characters of a Cartesian displacement.
+		// Translations and reciprocal q wraps need additional Bloch factors;
+		// general Cartesian mixing needs multi-component irreps.
+		if(op.a.length_squared()>1e-20 || (pInfo.qvec*op.inv().rot-pInfo.qvec).length_squared()>1e-20
+			|| (op.rot*position-position).length_squared()>1e-20) continue;
+		vector3<> rotated=g.R*op.rot*g.invR*mode.dirCartesian;
+		double character;
+		if((rotated-mode.dirCartesian).length_squared()<1e-20) character=1.;
+		else if((rotated+mode.dirCartesian).length_squared()<1e-20) character=-1.;
+		else continue;
+		kSymmetries.push_back(op); kCharacters.push_back(character);
+	}
+	if(kSymmetries.size()<2) return;
+	auto matches=[](vector3<> a,const vector3<>& b) {
+		a-=b; for(int d=0;d<3;d++) a[d]-=round(a[d]);
+		return a.length_squared()<1e-16;
+	};
+	std::vector<std::vector<int>> maps(kSymmetries.size(),std::vector<int>(eInfo.nStates,-1));
+	for(size_t s=0;s<kSymmetries.size();s++) for(int k=0;k<eInfo.nStates;k++) {
+		vector3<> target=eInfo.qnums[k].k*kSymmetries[s].inv().rot;
+		for(int j=0;j<eInfo.nStates;j++) if(matches(target,eInfo.qnums[j].k)) { maps[s][k]=j; break; }
+		if(maps[s][k]<0) die("DFPT response symmetry does not preserve the k mesh.\n");
+	}
+	kRepresentatives.assign(eInfo.nStates,-1); kOperations.assign(eInfo.nStates,-1);
+	responseWeights.assign(eInfo.nStates,0.);
+	std::vector<int> load(mpiWorld->nProcesses(),0);
+	int reduced=0;
+	for(int seed=0;seed<eInfo.nStates;seed++) {
+		if(kRepresentatives[seed]>=0) continue;
+		std::vector<int> orbit;
+		for(const auto& map:maps) orbit.push_back(map[seed]);
+		std::sort(orbit.begin(),orbit.end()); orbit.erase(std::unique(orbit.begin(),orbit.end()),orbit.end());
+		int representative=orbit[0];
+		for(int k:orbit) if(load[eInfo.whose(k)]<load[eInfo.whose(representative)]) representative=k;
+		load[eInfo.whose(representative)]++; reduced++;
+		for(int k:orbit) {
+			if(kRepresentatives[k]>=0) die("DFPT response k orbits overlap.\n");
+			kRepresentatives[k]=representative;
+			responseWeights[representative]+=eInfo.qnums[k].weight;
+			for(size_t s=0;s<maps.size();s++) if(maps[s][representative]==k) { kOperations[k]=s; break; }
+			if(kOperations[k]<0) die("DFPT response k orbit is not closed.\n");
+		}
+	}
+	if(reduced==eInfo.nStates) return;
+	// The driver already checked that these space-group operations exactly
+	// permute the FFT mesh and preserve the frozen Hamiltonian.
+	for(const auto& op:kSymmetries) {
+		matrix3<int> rotation;
+		for(int i=0;i<3;i++) for(int j=0;j<3;j++) rotation(i,j)=int(round(double(op.rot(i,j))*g.S[i]/g.S[j]));
+		std::vector<int> map(g.nr);
+		vector3<int> x;
+		for(x[0]=0;x[0]<g.S[0];x[0]++) for(x[1]=0;x[1]<g.S[1];x[1]++) for(x[2]=0;x[2]<g.S[2];x[2]++) {
+			vector3<int> y=rotation*x;
+			for(int d=0;d<3;d++) y[d]=(y[d]%g.S[d]+g.S[d])%g.S[d];
+			map[(x[0]*g.S[1]+x[1])*g.S[2]+x[2]]=(y[0]*g.S[1]+y[1])*g.S[2]+y[2];
+		}
+		densitySymmetryMaps.push_back(std::move(map));
+	}
+	kReductionActive=true;
+	logPrintf("DFPT electronic response reduction: %d/%d k points, %zu displacement symmetries.\n",reduced,eInfo.nStates,kSymmetries.size());
+}
+
+void PerturbationSolver::symmetrizeResponseDensity(complexScalarFieldArray& density) const
+{
+	if(!kReductionActive) return;
+	for(auto& field:density) {
+		std::vector<complex> original(field->data(),field->data()+e.gInfo.nr);
+		complex* result=field->data();
+		for(int x=0;x<e.gInfo.nr;x++) {
+			complex sum=0.;
+			for(size_t s=0;s<densitySymmetryMaps.size();s++) sum+=kCharacters[s]*original[densitySymmetryMaps[s][x]];
+			result[x]=sum/double(densitySymmetryMaps.size());
+		}
+	}
+}
+
+void PerturbationSolver::expandKResponse()
+{
+	if(!kReductionActive) return;
+	// Force contractions need every Cartesian source on the full mesh. The
+	// sewing matrix rotates source-band columns to each target's eigenbasis;
+	// a spatial rotation alone would be wrong at degeneracies / arbitrary gauges.
+	if(metallic()) metallicProject(pInfo.dC);
+	for(int representative=0;representative<eInfo.nStates;representative++) {
+		if(kRepresentatives[representative]!=representative) continue;
+		ColumnBundle source(eInfo.nBands,e.basis[representative].nbasis,&e.basis[representative],&eInfo.qnums[representative],isGpuEnabled());
+		if(eInfo.isMine(representative)) source=eVars.C[representative];
+		if(mpiWorld->nProcesses()>1) mpiWorld->bcastData(source,eInfo.whose(representative));
+		std::vector<ColumnBundle> shifts(2);
+		for(int sign=0;sign<2;sign++) {
+			int index=representative+sign*eInfo.nStates;
+			const Basis& basis=sign ? pInfo.kminusq_basis[representative] : pInfo.kplusq_basis[representative];
+			const QuantumNumber& qnum=sign ? pInfo.kminusq_vectors[representative] : pInfo.kplusq_vectors[representative];
+			shifts[sign].init(eInfo.nBands,basis.nbasis,&basis,&qnum,isGpuEnabled());
+			if(eInfo.isMine(representative)) shifts[sign]=metallic()
+				? metallicMap(pInfo.dC[index],representative,sign) : pInfo.dC[index];
+			if(mpiWorld->nProcesses()>1) mpiWorld->bcastData(shifts[sign],eInfo.whose(representative));
+			if(metallic() && eInfo.isMine(representative)) pInfo.dC[index]=shifts[sign];
+		}
+		for(int k=eInfo.qStart;k<eInfo.qStop;k++) {
+			if(kRepresentatives[k]!=representative || k==representative) continue;
+			int s=kOperations[k];
+			SpaceGroupOp operation=kSymmetries[s].inv();
+			ColumnBundle rotated=eVars.C[k].similar(); rotated.zero();
+			ColumnBundleTransform::BasisWrapper wrapper(e.basis[k]);
+			ColumnBundleTransform(eInfo.qnums[representative].k,e.basis[representative],eInfo.qnums[k].k,wrapper,1,operation,1)
+				.scatterAxpy(1.,source,rotated,0,1);
+			matrix sewing=rotated^O(eVars.C[k]);
+			for(int sign=0;sign<2;sign++) {
+				int index=k+sign*eInfo.nStates;
+				ColumnBundle target=pInfo.Cinc[index].similar(); target.zero();
+				ColumnBundleTransform::BasisWrapper offsetWrapper(*target.basis);
+				ColumnBundleTransform(shifts[sign].qnum->k,*shifts[sign].basis,target.qnum->k,offsetWrapper,1,operation,1)
+					.scatterAxpy(kCharacters[s],shifts[sign],target,0,1);
+				target=target*sewing;
+				pInfo.dC[index]=std::move(target);
+			}
+		}
+	}
+	kReductionActive=false;
+	physicalResponse=metallic();
+}
+
+complex PerturbationSolver::forceResponse()
+{
+	// Metallic variational amplitudes depend on the stored empty-band
+	// projector. Contract expanded physical responses directly; inverting
+	// their susceptibility map would amplify roundoff in empty bands.
+	if(!physicalResponse) calcdGradTau();
+	complex response=0.;
+	for(int k=eInfo.qStart;k<eInfo.qStop;k++) for(int sign=0;sign<2;sign++) {
+		int index=k+sign*eInfo.nStates;
+		complex value;
+		if(physicalResponse) {
+			ColumnBundle derivative=pInfo.Cinc[index].similar(); derivative.zero();
+			dHtau(*derivative.qnum,derivative,eVars.C[k],sign ? -1 : 1);
+			value=eInfo.qnums[k].weight*dotc(derivative,pInfo.dC[index]);
+		} else value=dotc(pInfo.dGradTau.X[index],pInfo.dC[index]);
+		response+=sign ? conj(value) : value;
+	}
+	mpiWorld->allReduce(response,MPIUtil::ReduceSum);
+	return response;
+}
+
+PerturbationGradient PerturbationSolver::screeningSource(const complexScalarFieldArray& potential)
+{
+	PerturbationGradient result; result.init(e);
+	complexScalarFieldArray negative=conj(potential);
+	for(int k=eInfo.qStart;k<eInfo.qStop;k++) if(activeResponse(k)) for(int sign=0;sign<2;sign++) {
+		int index=k+sign*eInfo.nStates;
+		ColumnBundle derivative=pInfo.Cinc[index].similar(); derivative.zero();
+		dHpsi(*derivative.qnum,derivative,eVars.C[k],sign ? negative : potential);
+		if(metallic()) result.X[index]=metallicMap(derivative,k,sign);
+		else {
+			const ColumnBundle& C=pInfo.Cinc[index];
+			result.X[index]=(derivative-O(C*(C^derivative)))*eVars.F[k];
+		}
+	}
+	if(metallic()) metallicProject(result.X);
+	for(int k=eInfo.qStart;k<eInfo.qStop;k++) if(activeResponse(k)) for(int sign=0;sign<2;sign++)
+		result.X[k+sign*eInfo.nStates]*=responseWeight(k);
+	return result;
+}
+
+ColumnBundle PerturbationSolver::bareBandOperator(const ColumnBundle& X,int k,const std::vector<int>& bands)
+{
+	int sign=(X.qnum==&pInfo.kminusq_vectors[k]) ? 1 : 0;
+	const ColumnBundle& C=pInfo.Cinc[k+sign*eInfo.nStates];
+	ColumnBundle low=C*(C^O(X)), high=X-low, result;
+	applyH(*X.qnum,eye(X.nCols()),result,high);
+	diagMatrix energies(bands.size());
+	for(size_t i=0;i<bands.size();i++) energies[i]=eVars.Hsub_eigs[k][bands[i]];
+	result-=O(high)*energies;
+	result-=C*(C^O(result));
+	if(metallic()) result+=O(low);
+	return result;
+}
+
+ColumnBundle PerturbationSolver::bareBandPrecondition(const ColumnBundle& X,int k,int sign)
+{
+	const ColumnBundle& C=pInfo.Cinc[k+sign*eInfo.nStates];
+	ColumnBundle low=C*(C^O(X)), result=X-low;
+	precond_inv_kinetic(result,1.);
+	result-=C*(C^O(result));
+	if(metallic()) result+=low;
+	return result;
+}
+
+bool PerturbationSolver::solveIndependentBands(const PerturbationGradient& rhs,const SolverParams& parameters)
+{
+	// Each MPI rank owns complete plane-wave vectors for its k points. With
+	// screening fixed, these blocks require no inter-k density reductions.
+	// Pack only unconverged source bands into subsequent Hamiltonian calls.
+	struct Block {
+		int k,sign;
+		std::vector<int> bands;
+		ColumnBundle solution,residual,direction;
+		diagMatrix rho,reference;
+	};
+	std::vector<Block> blocks;
+	double referenceNorm=0.; int totalBands=0;
+	for(int k=eInfo.qStart;k<eInfo.qStop;k++) if(activeResponse(k)) for(int sign=0;sign<2;sign++) {
+		int index=k+sign*eInfo.nStates;
+		Block block; block.k=k; block.sign=sign;
+		block.residual=rhs.X[index]; block.residual*=(-1./responseWeight(k));
+		block.solution=block.residual.similar(); block.solution.zero();
+		block.direction=bareBandPrecondition(block.residual,k,sign);
+		block.rho=diagDot(block.residual,block.direction); block.reference=block.rho;
+		for(double rho:block.rho) referenceNorm+=std::max(0.,rho)*std::pow(responseWeight(k),2);
+		totalBands+=eInfo.nBands;
+		for(int band=0;band<eInfo.nBands;band++) block.bands.push_back(band);
+		blocks.push_back(std::move(block));
+	}
+	mpiWorld->allReduce(referenceNorm,MPIUtil::ReduceSum);
+	mpiWorld->allReduce(totalBands,MPIUtil::ReduceSum);
+	// Use a common absolute residual budget, as in QE. Relative tests against
+	// each tiny empty-band source would oversolve bands with negligible weight.
+	for(auto& block:blocks) for(double& reference:block.reference)
+		reference=referenceNorm/(std::max(1,totalBands)*std::pow(responseWeight(block.k),2));
+	auto select=[](const ColumnBundle& X,const std::vector<int>& indices) {
+		ColumnBundle result=X.similar(indices.size());
+		for(size_t i=0;i<indices.size();i++) result.setSub(i,X.getSub(indices[i],indices[i]+1));
+		return result;
+	};
+	int applications=0;
+	for(int iteration=0;iteration<parameters.nIterations;iteration++) {
+		bool failed=false,unfinished=false;
+		for(auto& block:blocks) {
+			if(block.bands.empty()) continue;
+			std::vector<int> retain;
+			for(size_t i=0;i<block.bands.size();i++) {
+				if(block.rho[i]<=parameters.residualTol*parameters.residualTol*block.reference[i] || block.reference[i]<=1e-30)
+					state.X[block.k+block.sign*eInfo.nStates].setSub(block.bands[i],block.solution.getSub(i,i+1));
+				else retain.push_back(i);
+			}
+			if(retain.size()!=block.bands.size()) {
+				std::vector<int> bands; diagMatrix rho(retain.size()), reference(retain.size());
+				for(size_t i=0;i<retain.size();i++) { bands.push_back(block.bands[retain[i]]); rho[i]=block.rho[retain[i]]; reference[i]=block.reference[retain[i]]; }
+				block.bands=std::move(bands); block.rho=std::move(rho); block.reference=std::move(reference);
+				if(block.bands.empty()) continue;
+				block.solution=select(block.solution,retain); block.residual=select(block.residual,retain); block.direction=select(block.direction,retain);
+			}
+			unfinished=true;
+			ColumnBundle applied=bareBandOperator(block.direction,block.k,block.bands);
+			applications+=block.bands.size();
+			diagMatrix curvature=diagDot(block.direction,applied), alpha(block.bands.size());
+			for(size_t i=0;i<block.bands.size();i++) {
+				if(!std::isfinite(curvature[i]) || curvature[i]<=0. || !std::isfinite(block.rho[i]) || block.rho[i]<=0.) { failed=true; break; }
+				alpha[i]=block.rho[i]/curvature[i];
+			}
+			if(failed) break;
+			block.solution+=block.direction*alpha; block.residual-=applied*alpha;
+			ColumnBundle preconditioned=bareBandPrecondition(block.residual,block.k,block.sign);
+			diagMatrix rho=diagDot(block.residual,preconditioned), beta(rho.size());
+			for(size_t i=0;i<rho.size();i++) beta[i]=rho[i]/block.rho[i];
+			block.direction=preconditioned+block.direction*beta; block.rho=std::move(rho);
+		}
+		mpiWorld->allReduce(failed,MPIUtil::ReduceLOr);
+		if(failed) {
+			state*=0.;
+			logPrintf("DFPT independent-band CG encountered nonpositive curvature; using MINRES for this inner solve.\n");
+			return false;
+		}
+		mpiWorld->allReduce(unfinished,MPIUtil::ReduceLOr);
+		if(!unfinished) {
+			mpiWorld->allReduce(applications,MPIUtil::ReduceSum);
+			logPrintf("DFPT independent-band solve: %d iterations, %d band Hamiltonian applications.\n",iteration,applications);
+			return true;
+		}
+	}
+	state*=0.;
+	logPrintf("DFPT independent-band solve reached its iteration limit; using MINRES for this inner solve.\n");
+	return false;
+}
+
+void PerturbationSolver::solveNestedResponse()
+{
+	complexScalarFieldArray potential(pInfo.dVsclocpq.size());
+	nullToZero(potential,e.gInfo); initZero(potential);
+	std::vector<complexScalarFieldArray> inputs, outputs, errors;
+	auto potentialDot=[](const complexScalarFieldArray& a,const complexScalarFieldArray& b) {
+		double result=0.; for(size_t s=0;s<a.size();s++) result+=dot(a[s],b[s]).real(); return result;
+	};
+	const double sourceNorm=dot(pInfo.dGradTau,pInfo.dGradTau);
+	double relative=1.;
+	for(int outer=0;outer<pInfo.phononMixIterations;outer++) {
+		PerturbationGradient rhs=clone(pInfo.dGradTau);
+		if(outer) axpy(1.,screeningSource(potential),rhs);
+		// Solve a correction about the previous *physical* response. MINRES
+		// stores preconditioned coordinates internally, so passing its previous
+		// physical state directly as a warm start would apply Ksqrt twice.
+		PerturbationGradient previous=std::move(state), correctionRhs;
+		screeningEnabled=false;
+		hessian(correctionRhs,previous); axpy(1.,rhs,correctionRhs);
+		state=clone(previous); state*=0.;
+		SolverParams inner=pInfo.solverParams;
+		inner.algorithm=SolverParams::MINRES;
+		inner.residualDiffThreshold=0.;
+		inner.residualTol=std::max(0.05*pInfo.solverParams.residualTol,std::min(1e-2,0.1*relative));
+		if(!solveIndependentBands(correctionRhs,inner)) solve(correctionRhs,inner);
+		axpy(1.,previous,state);
+		screeningEnabled=true;
+		PerturbationGradient residual;
+		hessian(residual,state); axpy(1.,pInfo.dGradTau,residual);
+		double norm=dot(residual,residual);
+		relative=sourceNorm ? sqrt(norm/sourceNorm) : sqrt(norm);
+		logPrintf("DFPT nested iteration %d: coupled relative residual %.6le, inner tolerance %.6le.\n",outer+1,relative,inner.residualTol);
+		if(!std::isfinite(relative)) die("Nonfinite nested DFPT response residual.\n");
+		if(relative<=pInfo.solverParams.residualTol) return;
+		complexScalarFieldArray output=clone(pInfo.dVsclocpq), error=output-potential;
+		inputs.push_back(clone(potential)); outputs.push_back(std::move(output)); errors.push_back(std::move(error));
+		if(int(errors.size())>pInfo.phononMixHistory) {
+			inputs.erase(inputs.begin()); outputs.erase(outputs.begin()); errors.erase(errors.begin());
+		}
+		int count=errors.size();
+		matrix gram=zeroes(count,count), ones=zeroes(count,1);
+		double scale=0.;
+		for(int i=0;i<count;i++) {
+			ones.set(i,0,1.);
+			for(int j=0;j<=i;j++) { double value=potentialDot(errors[i],errors[j]); gram.set(i,j,value); gram.set(j,i,value); }
+			scale=std::max(scale,gram(i,i).real());
+		}
+		for(int i=0;i<count;i++) gram.set(i,i,gram(i,i)+std::max(1e-30,1e-10*scale));
+		matrix coefficients=invApply(gram,ones);
+		double total=0.; for(int i=0;i<count;i++) total+=coefficients(i,0).real();
+		bool valid=std::isfinite(total) && total>0.;
+		for(int i=0;i<count;i++) valid &= std::isfinite(coefficients(i,0).real()) && fabs(coefficients(i,0).real()/total)<20.;
+		initZero(potential);
+		if(valid) for(int i=0;i<count;i++) {
+			double coefficient=coefficients(i,0).real()/total;
+			axpy(coefficient*(1.-pInfo.phononMixFraction),inputs[i],potential);
+			axpy(coefficient*pInfo.phononMixFraction,outputs[i],potential);
+		} else {
+			axpy(1.-pInfo.phononMixFraction,inputs.back(),potential);
+			axpy(pInfo.phononMixFraction,outputs.back(),potential);
+			inputs.clear(); outputs.clear(); errors.clear();
+		}
+	}
+	die("Nested DFPT response did not converge; increase phonon-dfpt-mixing iterations or use the coupled solver.\n");
+}
+
 void PerturbationSolver::solvePerturbation()
 {
 	if (pInfo.testing)
@@ -154,7 +512,9 @@ void PerturbationSolver::solvePerturbation()
 	if(!pInfo.commensurate && pInfo.wfnsFilename.empty() && !pInfo.offsetStatesReady)
 	{ computeIncommensurateWfns(); pInfo.offsetStatesReady=true; }
 	if(metallic() && !metallicReady) setupMetallicResponse();
+	prepareKReduction();
 
+	state.X.clear();
 	state.init(e);
 	if (pInfo.commensurate) {
 		init(state.X, eInfo.nStates, eInfo.nBands, &e.basis[0], &eInfo);
@@ -163,6 +523,7 @@ void PerturbationSolver::solvePerturbation()
 	} else {
 		pInfo.initInc(state.X, 2*eInfo.nStates, eInfo.nBands, &eInfo);
 		for(int q=eInfo.qStart; q<eInfo.qStop; q++) {
+			if(!activeResponse(q)) { state.X[q].free(); state.X[q+eInfo.nStates].free(); continue; }
 			state.X[q].zero();
 			state.X[q+eInfo.nStates].zero();
 		}
@@ -170,8 +531,11 @@ void PerturbationSolver::solvePerturbation()
 	
 	if(!pInfo.phononGrid.isNonzero()) eVars.elecEnergyAndGrad(e.ener, nullptr, nullptr, true);
 
-	updateExcorrCache();
-	updateHC();
+	if(!usePhononCache() || !groundCachesReady) {
+		updateExcorrCache();
+		updateHC();
+		groundCachesReady=true;
+	}
 	updateNonlocalDerivs();
 	
 	pInfo.dGradTau.init(e);
@@ -183,20 +547,22 @@ void PerturbationSolver::solvePerturbation()
 	// The band-space and plane-wave blocks have different energy scales;
 	// leave margin between the preconditioned and verified Euclidean residual.
 	if(metallic()) responseParams.residualTol*=0.05;
-	solve(pInfo.dGradTau, responseParams);
+	if(pInfo.phononNestedSolver && pInfo.phononGrid.isNonzero()) solveNestedResponse();
+	else solve(pInfo.dGradTau, responseParams);
 	
 	hessian(pInfo.dGradPsi, state);
 	if(metallic() && pInfo.qvec.length_squared()<1e-20) {
 		complex charge(integral(Real(pInfo.dnpq[0])),integral(Imag(pInfo.dnpq[0])));
 		complex shift=0.;
 		for(int k=eInfo.qStart;k<eInfo.qStop;k++) {
+			if(!activeResponse(k)) continue;
 			ColumnBundle bare=pInfo.Cinc[k].similar(), induced=bare.similar();
 			bare.zero(); induced.zero();
 			dHtau(*pInfo.Cinc[k].qnum,bare,eVars.C[k],1);
 			dHpsi(*pInfo.Cinc[k].qnum,induced,eVars.C[k],pInfo.dVsclocpq);
 			matrix dH=eVars.C[k]^(bare+induced);
 			for(int n=0;n<eInfo.nBands;n++)
-				shift-=eInfo.qnums[k].weight*eInfo.smearPrime(metallicMu,eVars.Hsub_eigs[k][n])*dH(n,n);
+				shift-=responseWeight(k)*eInfo.smearPrime(metallicMu,eVars.Hsub_eigs[k][n])*dH(n,n);
 		}
 		mpiWorld->allReduce(shift,MPIUtil::ReduceSum);
 		if(metallicDOS>1e-30) shift*=1./metallicDOS;
@@ -210,6 +576,7 @@ void PerturbationSolver::solvePerturbation()
 	logPrintf("DFPT final relative residual: %.6le\n",bnorm ? sqrt(rnorm/bnorm) : sqrt(rnorm));
 	if(pInfo.phononGrid.isNonzero() && (!std::isfinite(rnorm) || rnorm > std::pow(10*pInfo.solverParams.residualTol,2)*bnorm))
 		die("DFPT phonon response did not converge; increase perturb-minimize nIterations or tighten the ground-state solve.\n");
+	expandKResponse();
 }
 
 // Eq. (70) of Baroni et al.: the divided difference of occupations is
@@ -288,16 +655,18 @@ void PerturbationSolver::metallicProject(std::vector<ColumnBundle>& X) const
 	for(int sign=0;sign<2;sign++) {
 		complex charge=0.; double norm=0.;
 		for(int k=eInfo.qStart;k<eInfo.qStop;k++) {
+			if(!activeResponse(k)) continue;
 			int index=k+sign*eInfo.nStates;
 			const ColumnBundle& C=pInfo.Cinc[index];
 			matrix t=metallicHadamard(metallicWeights[index],C^O(eVars.C[k]));
-			charge+=eInfo.qnums[k].weight*trace(dagger(t)*(C^O(X[index])));
-			norm+=eInfo.qnums[k].weight*std::pow(nrm2(t),2);
+			charge+=responseWeight(k)*trace(dagger(t)*(C^O(X[index])));
+			norm+=responseWeight(k)*std::pow(nrm2(t),2);
 		}
 		mpiWorld->allReduce(charge,MPIUtil::ReduceSum);
 		mpiWorld->allReduce(norm,MPIUtil::ReduceSum);
 		if(norm<=1e-30) continue; // zero DOS: insulating limit
 		for(int k=eInfo.qStart;k<eInfo.qStop;k++) {
+			if(!activeResponse(k)) continue;
 			int index=k+sign*eInfo.nStates;
 			const ColumnBundle& C=pInfo.Cinc[index];
 			matrix t=metallicHadamard(metallicWeights[index],C^O(eVars.C[k]));
@@ -320,17 +689,20 @@ ColumnBundle PerturbationSolver::metallicMap(const ColumnBundle& X,int k,int sig
 
 void PerturbationSolver::metallicHessian(PerturbationGradient& Av,const PerturbationGradient& v)
 {
-	std::vector<ColumnBundle> projected=v.X, response(2*eInfo.nStates);
-	metallicProject(projected);
-	for(int k=eInfo.qStart;k<eInfo.qStop;k++) for(int sign=0;sign<2;sign++) {
-		int index=k+sign*eInfo.nStates;
-		response[index]=metallicMap(projected[index],k,sign);
+	if(screeningEnabled) {
+		std::vector<ColumnBundle> projected=v.X, response(2*eInfo.nStates);
+		metallicProject(projected);
+		for(int k=eInfo.qStart;k<eInfo.qStop;k++) if(activeResponse(k)) for(int sign=0;sign<2;sign++) {
+			int index=k+sign*eInfo.nStates;
+			response[index]=metallicMap(projected[index],k,sign);
+		}
+		getdnInc(&response,nullptr,pInfo.dnpq,pInfo.dnmq);
+		getdVsclocPsi(pInfo.dnpq,pInfo.dVsclocpq,&pInfo.qvec);
+		pInfo.dVsclocmq=conj(pInfo.dVsclocpq);
 	}
-	getdnInc(&response,nullptr,pInfo.dnpq,pInfo.dnmq);
-	getdVsclocPsi(pInfo.dnpq,pInfo.dVsclocpq,&pInfo.qvec);
-	pInfo.dVsclocmq=conj(pInfo.dVsclocpq);
 	std::vector<ColumnBundle> induced(2*eInfo.nStates), kinetic(2*eInfo.nStates);
 	for(int k=eInfo.qStart;k<eInfo.qStop;k++) for(int sign=0;sign<2;sign++) {
+		if(!activeResponse(k)) continue;
 		int index=k+sign*eInfo.nStates;
 		const ColumnBundle& C=pInfo.Cinc[index];
 		// Preserve the variational amplitudes for force-matrix contractions.
@@ -341,15 +713,19 @@ void PerturbationSolver::metallicHessian(PerturbationGradient& Av,const Perturba
 		Hhigh-=O(high)*eVars.Hsub_eigs[k];
 		Hhigh-=C*(C^O(Hhigh));
 		kinetic[index]=Hhigh+O(low);
-		ColumnBundle dHC=C.similar(); dHC.zero();
-		dHpsi(*C.qnum,dHC,eVars.C[k],sign ? pInfo.dVsclocmq : pInfo.dVsclocpq);
-		induced[index]=metallicMap(dHC,k,sign);
+		if(screeningEnabled) {
+			ColumnBundle dHC=C.similar(); dHC.zero();
+			dHpsi(*C.qnum,dHC,eVars.C[k],sign ? pInfo.dVsclocmq : pInfo.dVsclocpq);
+			induced[index]=metallicMap(dHC,k,sign);
+		}
 	}
-	metallicProject(induced);
+	if(screeningEnabled) metallicProject(induced);
 	Av.init(e);
 	for(int k=eInfo.qStart;k<eInfo.qStop;k++) for(int sign=0;sign<2;sign++) {
 		int index=k+sign*eInfo.nStates;
-		Av.X[index]=(kinetic[index]+induced[index])*eInfo.qnums[k].weight;
+		if(!activeResponse(k)) { Av.X[index].free(); continue; }
+		if(screeningEnabled) Av.X[index]=(kinetic[index]+induced[index])*responseWeight(k);
+		else Av.X[index]=kinetic[index]*responseWeight(k);
 	}
 }
 
@@ -357,27 +733,31 @@ void PerturbationSolver::metallicSource()
 {
 	for(int k=eInfo.qStart;k<eInfo.qStop;k++) for(int sign=0;sign<2;sign++) {
 		int index=k+sign*eInfo.nStates;
+		if(!activeResponse(k)) { pInfo.dGradTau.X[index].free(); continue; }
 		ColumnBundle dHC=pInfo.Cinc[index].similar(); dHC.zero();
 		dHtau(*pInfo.Cinc[index].qnum,dHC,eVars.C[k],sign ? -1 : 1);
 		pInfo.dGradTau.X[index]=metallicMap(dHC,k,sign);
 	}
 	metallicProject(pInfo.dGradTau.X);
-	for(int k=eInfo.qStart;k<eInfo.qStop;k++) for(int sign=0;sign<2;sign++)
-		pInfo.dGradTau.X[k+sign*eInfo.nStates]*=eInfo.qnums[k].weight;
+	for(int k=eInfo.qStart;k<eInfo.qStop;k++) if(activeResponse(k)) for(int sign=0;sign<2;sign++)
+		pInfo.dGradTau.X[k+sign*eInfo.nStates]*=responseWeight(k);
 }
 
 void PerturbationSolver::precondition(PerturbationGradient& v) {
 	if(metallic()) { Ksqrt(v); Ksqrt(v); return; }
 	//Apply inverse kinetic preconditioner
 	for(int q=eInfo.qStart; q<eInfo.qStop; q++) {
+		if(!activeResponse(q)) continue;
 		precond_inv_kinetic(v.X[q], 1);
 		if (!pInfo.commensurate) precond_inv_kinetic(v.X[q + eInfo.nStates], 1);
+		if(kReductionActive) { v.X[q]*=1./responseWeight(q); v.X[q+eInfo.nStates]*=1./responseWeight(q); }
 	}
 }
 
 void PerturbationSolver::Ksqrt(PerturbationGradient& v) {
 	if(metallic()) {
 		for(int k=eInfo.qStart;k<eInfo.qStop;k++) for(int sign=0;sign<2;sign++) {
+			if(!activeResponse(k)) continue;
 			int index=k+sign*eInfo.nStates;
 			const ColumnBundle& C=pInfo.Cinc[index];
 			ColumnBundle low=C*(C^O(v.X[index]));
@@ -385,13 +765,16 @@ void PerturbationSolver::Ksqrt(PerturbationGradient& v) {
 			precond_inv_kinetic(v.X[index],1,true);
 			v.X[index]-=C*(C^O(v.X[index]));
 			v.X[index]+=low;
+			if(kReductionActive) v.X[index]*=1./sqrt(responseWeight(k));
 		}
 		return;
 	}
 	//Apply inverse kinetic preconditioner
 	for(int q=eInfo.qStart; q<eInfo.qStop; q++) {
+		if(!activeResponse(q)) continue;
 		precond_inv_kinetic(v.X[q], 1, true);
 		if (!pInfo.commensurate) precond_inv_kinetic(v.X[q + eInfo.nStates], 1, true);
+		if(kReductionActive) { double scale=1./sqrt(responseWeight(q)); v.X[q]*=scale; v.X[q+eInfo.nStates]*=scale; }
 	}
 }
 
@@ -410,6 +793,7 @@ void PerturbationSolver::hessian(PerturbationGradient& Av, const PerturbationGra
 	} else {
 		for(int q=eInfo.qStart; q<eInfo.qStop; q++) {
 			int kpq_k = q;
+			if(!activeResponse(q)) { pInfo.dC[q].free(); pInfo.dC[q+eInfo.nStates].free(); continue; }
 			int kmq_k = q+e.eInfo.nStates;
 			int kpq = q ;
 			int kmq = q + e.eInfo.nStates;
@@ -424,9 +808,11 @@ void PerturbationSolver::hessian(PerturbationGradient& Av, const PerturbationGra
 		e.iInfo.augmentDensityGridGrad(pInfo.dVscloc);
 		pInfo.E_nAug_dVsclocpsi = iInfo.getE_nAug();
 	} else {
-		getdnInc(&pInfo.dC, 0, pInfo.dnpq, pInfo.dnmq);
-		getdVsclocPsi(pInfo.dnpq, pInfo.dVsclocpq, &pInfo.qvec);
-		pInfo.dVsclocmq = conj(pInfo.dVsclocpq);
+		if(screeningEnabled) {
+			getdnInc(&pInfo.dC, 0, pInfo.dnpq, pInfo.dnmq);
+			getdVsclocPsi(pInfo.dnpq, pInfo.dVsclocpq, &pInfo.qvec);
+			pInfo.dVsclocmq = conj(pInfo.dVsclocpq);
+		}
 	}
 
 	if (pInfo.commensurate) {
@@ -453,8 +839,7 @@ void PerturbationSolver::hessian(PerturbationGradient& Av, const PerturbationGra
 		}
 	} else {
 		for(int q=eInfo.qStart; q<eInfo.qStop; q++) {
-
-			const QuantumNumber& qnum = e.eInfo.qnums[q];
+			if(!activeResponse(q)) { Av.X[q].free(); Av.X[q+eInfo.nStates].free(); continue; }
 
 			ColumnBundle dHC_kpq_k, dHC_kmq_k,
 			HdC_kpq_k, HdC_kmq_k,
@@ -471,22 +856,22 @@ void PerturbationSolver::hessian(PerturbationGradient& Av, const PerturbationGra
 			dHC_kpq_k.zero();
 			dHC_kmq_k.zero();
 			
-			dHpsi(pInfo.kplusq_vectors[q], dHC_kpq_k, eVars.C[q], pInfo.dVsclocpq);
+			if(screeningEnabled) dHpsi(pInfo.kplusq_vectors[q], dHC_kpq_k, eVars.C[q], pInfo.dVsclocpq);
 			applyH(pInfo.kplusq_vectors[q], F, HdC_kpq_k, pInfo.dC[kpq_k]);
 			dwGradEq_kpq_k = dHC_kpq_k;
 			dwGradEq_kpq_k += HdC_kpq_k;
 			dwGradEq_kpq_k -= O(pInfo.Cinc[kpq]*(pInfo.Cinc[kpq]^dHC_kpq_k));
 			dwGradEq_kpq_k -= O(pInfo.dC[kpq_k]*eVars.Hsub[q]);
 
-			dHpsi(pInfo.kminusq_vectors[q], dHC_kmq_k, eVars.C[q], pInfo.dVsclocmq);
+			if(screeningEnabled) dHpsi(pInfo.kminusq_vectors[q], dHC_kmq_k, eVars.C[q], pInfo.dVsclocmq);
 			applyH(pInfo.kminusq_vectors[q], F, HdC_kmq_k, pInfo.dC[kmq_k]);
 			dwGradEq_kmq_k = dHC_kmq_k;
 			dwGradEq_kmq_k += HdC_kmq_k;
 			dwGradEq_kmq_k -= O(pInfo.Cinc[kmq]*(pInfo.Cinc[kmq]^dHC_kmq_k));
 			dwGradEq_kmq_k -= O(pInfo.dC[kmq_k]*eVars.Hsub[q]);
 
-			Av.X[kpq_k] = (dwGradEq_kpq_k - O(pInfo.Cinc[kpq]*(pInfo.Cinc[kpq]^dwGradEq_kpq_k)))*F*qnum.weight;
-			Av.X[kmq_k] = (dwGradEq_kmq_k - O(pInfo.Cinc[kmq]*(pInfo.Cinc[kmq]^dwGradEq_kmq_k)))*F*qnum.weight;
+			Av.X[kpq_k] = (dwGradEq_kpq_k - O(pInfo.Cinc[kpq]*(pInfo.Cinc[kpq]^dwGradEq_kpq_k)))*F*responseWeight(q);
+			Av.X[kmq_k] = (dwGradEq_kmq_k - O(pInfo.Cinc[kmq]*(pInfo.Cinc[kmq]^dwGradEq_kmq_k)))*F*responseWeight(q);
 		}
 	}
 	
@@ -494,7 +879,12 @@ void PerturbationSolver::hessian(PerturbationGradient& Av, const PerturbationGra
 }
 
 void PerturbationSolver::calcdGradTau() {
-	if(metallic()) { metallicSource(); return; }
+	if(usePhononCache() && !kReductionActive) {
+		auto cached=sourceCache.find(pInfo.datom.get());
+		if(cached!=sourceCache.end()) { pInfo.dGradTau=cached->second; sourceCacheHits++; return; }
+	}
+	sourceBuilds++;
+	if(metallic()) { metallicSource(); cacheSource(); return; }
 	static StopWatch watch("dGradTau"); watch.start();
 	if (pInfo.commensurate) {
 		
@@ -562,7 +952,7 @@ void PerturbationSolver::calcdGradTau() {
 		}
 	} else {
 		for(int q=eInfo.qStart; q<eInfo.qStop; q++) {
-			const QuantumNumber& qnum = e.eInfo.qnums[q];
+			if(!activeResponse(q)) { pInfo.dGradTau.X[q].free(); pInfo.dGradTau.X[q+eInfo.nStates].free(); continue; }
 			ColumnBundle dHC_kpq_k, dHC_kmq_k,
 			dwGradEq_kpq_k, dwGradEq_kmq_k;
 			diagMatrix F = eVars.F[q];
@@ -583,12 +973,44 @@ void PerturbationSolver::calcdGradTau() {
 			dHtau(pInfo.kminusq_vectors[q], dHC_kmq_k, eVars.C[q], -1);
 			dwGradEq_kmq_k = dHC_kmq_k - O(pInfo.Cinc[kmq]*(pInfo.Cinc[kmq]^dHC_kmq_k));
 
-			pInfo.dGradTau.X[kpq_k] = dwGradEq_kpq_k*F*qnum.weight;
-			pInfo.dGradTau.X[kmq_k] = dwGradEq_kmq_k*F*qnum.weight;
+			pInfo.dGradTau.X[kpq_k] = dwGradEq_kpq_k*F*responseWeight(q);
+			pInfo.dGradTau.X[kmq_k] = dwGradEq_kmq_k*F*responseWeight(q);
 		}
 	}
 	
 	watch.stop();
+	cacheSource();
+}
+
+bool PerturbationSolver::usePhononCache() const
+{
+	// Cache lifetimes are limited to the frozen, norm-conserving phonon path.
+	// General perturbations and finite-difference tests may change the state.
+	return pInfo.phononCache && pInfo.phononGrid.isNonzero()
+		&& !pInfo.testing && !pInfo.commensurate && pInfo.datom
+		&& !pInfo.dVext && !pInfo.drhoExt;
+}
+
+void PerturbationSolver::cacheSource()
+{
+	if(!usePhononCache() || kReductionActive || pInfo.phononSourceCacheMiB<=0.) return;
+	size_t bytes=0;
+	for(const ColumnBundle& X:pInfo.dGradTau.X)
+		bytes+=X.nCols()*X.colLength()*sizeof(complex);
+	// Metallic sources include a collective charge projection. All ranks must
+	// therefore cache the same entries, even when their local basis sizes differ.
+	double maximumBytes=double(bytes);
+	mpiWorld->allReduce(maximumBytes,MPIUtil::ReduceMax);
+	double budget=pInfo.phononSourceCacheMiB*1024.*1024.;
+	if(double(sourceCacheBytes)+maximumBytes>budget) return;
+	sourceCache.emplace(pInfo.datom.get(),pInfo.dGradTau);
+	sourceCacheBytes+=size_t(maximumBytes);
+}
+
+void PerturbationSolver::reportPhononCache() const
+{
+	logPrintf("DFPT q cache: %zu retained sources, %d hits, %d source builds, %d bare potential pairs, maximum rank storage %.3f MiB.\n",
+		sourceCache.size(),sourceCacheHits,sourceBuilds,barePotentialBuilds,sourceCacheBytes/(1024.*1024.));
 }
 
 void PerturbationSolver::getGrad(std::vector<ColumnBundle> *grad, std::vector<ColumnBundle> Y) {
@@ -929,14 +1351,15 @@ void PerturbationSolver::getdnInc(const std::vector<ColumnBundle>* dC, const std
 	for(int q=e.eInfo.qStart; q<e.eInfo.qStop; q++)
 	{
 		int kpq_k = q;
+		if(!activeResponse(q)) continue;
 		int kmq_k = q+e.eInfo.nStates;
 
 		if (C) {
-			dnpq += e.eInfo.qnums[q].weight * diagouterI((metallic() ? eye(eInfo.nBands) : eVars.F[q]), (*C)[q], (*dC)[kmq_k], dnpq.size(), &e.gInfo);
-			dnpq += e.eInfo.qnums[q].weight * diagouterI((metallic() ? eye(eInfo.nBands) : eVars.F[q]), (*dC)[kpq_k], (*C)[q], dnpq.size(), &e.gInfo);
+			dnpq += responseWeight(q) * diagouterI((metallic() ? eye(eInfo.nBands) : eVars.F[q]), (*C)[q], (*dC)[kmq_k], dnpq.size(), &e.gInfo);
+			dnpq += responseWeight(q) * diagouterI((metallic() ? eye(eInfo.nBands) : eVars.F[q]), (*dC)[kpq_k], (*C)[q], dnpq.size(), &e.gInfo);
 		} else {
-			dnpq += e.eInfo.qnums[q].weight * diagouterI((metallic() ? eye(eInfo.nBands) : eVars.F[q]), eVars.C[q], (*dC)[kmq_k], dnpq.size(), &e.gInfo);
-			dnpq += e.eInfo.qnums[q].weight * diagouterI((metallic() ? eye(eInfo.nBands) : eVars.F[q]), (*dC)[kpq_k], eVars.C[q], dnpq.size(), &e.gInfo);
+			dnpq += responseWeight(q) * diagouterI((metallic() ? eye(eInfo.nBands) : eVars.F[q]), eVars.C[q], (*dC)[kmq_k], dnpq.size(), &e.gInfo);
+			dnpq += responseWeight(q) * diagouterI((metallic() ? eye(eInfo.nBands) : eVars.F[q]), (*dC)[kpq_k], eVars.C[q], dnpq.size(), &e.gInfo);
 		}
 	}
 
@@ -946,6 +1369,7 @@ void PerturbationSolver::getdnInc(const std::vector<ColumnBundle>* dC, const std
 	}
 
 	e.symm.symmetrize(dnpq);
+	symmetrizeResponseDensity(dnpq);
 	
 	dnmq = conj(dnpq);
 	
@@ -1096,7 +1520,20 @@ void PerturbationSolver::dHtau(const QuantumNumber& qnum, ColumnBundle& HCq, con
 void PerturbationSolver::dHtau(const QuantumNumber& qnum, ColumnBundle& HCq, const ColumnBundle& Cq, int qsign)
 {
 	complexScalarFieldArray dVscloc(eVars.Vscloc.size());
-	getdVsclocTau(dVscloc, qsign);
+	if(usePhononCache()) {
+		if(!barePotentialReady || barePotentialAtom!=pInfo.datom.get()
+			|| (barePotentialQ-pInfo.qvec).length_squared()>1e-24) {
+			barePotentialPlus.resize(eVars.Vscloc.size());
+			barePotentialMinus.resize(eVars.Vscloc.size());
+			getdVsclocTau(barePotentialPlus,1);
+			getdVsclocTau(barePotentialMinus,-1);
+			barePotentialBuilds++;
+			barePotentialAtom=pInfo.datom.get();
+			barePotentialQ=pInfo.qvec;
+			barePotentialReady=true;
+		}
+		dVscloc=qsign==1 ? barePotentialPlus : barePotentialMinus;
+	} else getdVsclocTau(dVscloc, qsign);
 	dHpsi(qnum, HCq, Cq, dVscloc);
 	if(pInfo.datom)
 	{

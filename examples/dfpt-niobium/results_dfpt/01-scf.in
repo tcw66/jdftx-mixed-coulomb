@@ -1,0 +1,4 @@
+include common.in
+symmetries automatic
+dump-name scf.$VAR
+dump End State Fillings BandEigs Forces

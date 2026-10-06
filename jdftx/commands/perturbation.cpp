@@ -390,6 +390,119 @@ struct CommandPhononDFPTReuseStates : public Command
 	{ logPrintf("%s",boolMap.getString(e.pertInfo.phononReuseOffsetStates)); }
 } commandPhononDFPTReuseStates;
 
+struct CommandPhononDFPTCache : public Command
+{
+	CommandPhononDFPTCache() : Command("phonon-dfpt-cache", "jdftx/Perturb")
+	{
+		format="<yes|no>";
+		comments="Cache frozen-ground-state XC data and bare displacement potentials within each q (default yes).\n"
+			"Also retain displacement source vectors up to phonon-dfpt-source-cache-size MiB per rank.\n"
+			"Set no to recompute these quantities for numerical validation.";
+		require("phonon-dfpt");
+	}
+	void process(ParamList& pl,Everything& e)
+	{ pl.get(e.pertInfo.phononCache,true,boolMap,"cache phonon data",true); }
+	void printStatus(Everything& e,int iRep)
+	{ logPrintf("%s",boolMap.getString(e.pertInfo.phononCache)); }
+} commandPhononDFPTCache;
+
+struct CommandPhononDFPTSourceCacheSize : public Command
+{
+	CommandPhononDFPTSourceCacheSize() : Command("phonon-dfpt-source-cache-size", "jdftx/Perturb")
+	{
+		format="<MiB>";
+		comments="Maximum additional source-vector cache storage per MPI rank (default 128 MiB).\n"
+			"Zero disables source-vector storage while retaining the small potential and XC caches.\n"
+			"Cache entries are released after each representative q point.";
+		require("phonon-dfpt");
+	}
+	void process(ParamList& pl,Everything& e)
+	{
+		pl.get(e.pertInfo.phononSourceCacheMiB,128.,"source cache size in MiB",true);
+		if(!std::isfinite(e.pertInfo.phononSourceCacheMiB) || e.pertInfo.phononSourceCacheMiB<0.)
+			throw string("source cache size must be finite and nonnegative");
+	}
+	void printStatus(Everything& e,int iRep)
+	{ logPrintf("%g",e.pertInfo.phononSourceCacheMiB); }
+} commandPhononDFPTSourceCacheSize;
+
+struct CommandPhononDFPTBalanceQGroups : public Command
+{
+	CommandPhononDFPTBalanceQGroups() : Command("phonon-dfpt-balance-q-groups", "jdftx/Perturb")
+	{
+		format="<yes|no>";
+		comments="Balance q groups using displacement counts and offset-state work (default yes).\n"
+			"Accounts for unequal group sizes and keeps all displacements at a q together.\n"
+			"Set no to assign representatives round-robin.";
+		require("phonon-dfpt");
+	}
+	void process(ParamList& pl,Everything& e)
+	{ pl.get(e.pertInfo.phononBalanceQGroups,true,boolMap,"balance q groups",true); }
+	void printStatus(Everything& e,int iRep)
+	{ logPrintf("%s",boolMap.getString(e.pertInfo.phononBalanceQGroups)); }
+} commandPhononDFPTBalanceQGroups;
+
+struct CommandPhononDFPTKSymmetries : public Command
+{
+	CommandPhononDFPTKSymmetries() : Command("phonon-dfpt-k-symmetries", "jdftx/Perturb")
+	{
+		format="<yes|no>";
+		comments="Reduce electronic response k points using the symmetry subgroup of each displacement (default no).\n"
+			"Uses translation-free operations preserving q exactly and the displaced atom, with direction character +/-1.\n"
+			"Symmetrizes response densities and reconstructs wavefunction responses with band sewing matrices.\n"
+			"Unsupported operations and electron-phonon export retain the full electronic mesh.";
+		require("phonon-dfpt");
+	}
+	void process(ParamList& pl,Everything& e)
+	{ pl.get(e.pertInfo.phononReduceK,false,boolMap,"reduce response k mesh",true); }
+	void printStatus(Everything& e,int iRep)
+	{ logPrintf("%s",boolMap.getString(e.pertInfo.phononReduceK)); }
+} commandPhononDFPTKSymmetries;
+
+struct CommandPhononDFPTSolver : public Command
+{
+	CommandPhononDFPTSolver() : Command("phonon-dfpt-solver", "jdftx/Perturb")
+	{
+		format="<coupled|nested>";
+		comments="Choose coupled response minimization or fixed-potential inner solves with outer potential mixing.\n"
+			"Default coupled; nested speed depends on the material and mesh.\n"
+			"Nested solves adapt inner accuracy to the outer residual and reuse the previous response.\n"
+			"Both paths verify the same final coupled response residual.";
+		require("phonon-dfpt");
+	}
+	void process(ParamList& pl,Everything& e)
+	{
+		string solver; pl.get(solver,string("coupled"),"phonon response solver",true);
+		if(solver!="coupled" && solver!="nested") throw string("solver must be coupled or nested");
+		e.pertInfo.phononNestedSolver=solver=="nested";
+	}
+	void printStatus(Everything& e,int iRep)
+	{ logPrintf("%s",e.pertInfo.phononNestedSolver ? "nested" : "coupled"); }
+} commandPhononDFPTSolver;
+
+struct CommandPhononDFPTMixing : public Command
+{
+	CommandPhononDFPTMixing() : Command("phonon-dfpt-mixing", "jdftx/Perturb")
+	{
+		format="<fraction> <history> <iterations>";
+		comments="Outer response potential mixing: fraction (0,1], history length, and maximum iterations.\n"
+			"Defaults: 0.4 8 80. Used only by phonon-dfpt-solver nested.";
+		require("phonon-dfpt");
+	}
+	void process(ParamList& pl,Everything& e)
+	{
+		auto& p=e.pertInfo;
+		pl.get(p.phononMixFraction,0.4,"mixing fraction",true);
+		pl.get(p.phononMixHistory,8,"mixing history",true);
+		pl.get(p.phononMixIterations,80,"outer iterations",true);
+		if(!std::isfinite(p.phononMixFraction) || p.phononMixFraction<=0. || p.phononMixFraction>1.)
+			throw string("mixing fraction must be finite and in (0,1]");
+		if(p.phononMixHistory<1 || p.phononMixIterations<1) throw string("history and iterations must be positive");
+	}
+	void printStatus(Everything& e,int iRep)
+	{ auto& p=e.pertInfo; logPrintf("%g %d %d",p.phononMixFraction,p.phononMixHistory,p.phononMixIterations); }
+} commandPhononDFPTMixing;
+
 struct CommandPhononDFPTInitialState : public Command
 {
 	CommandPhononDFPTInitialState() : Command("phonon-dfpt-initial-state", "jdftx/Perturb")

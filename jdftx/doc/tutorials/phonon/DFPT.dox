@@ -61,12 +61,38 @@ the resulting Bloch phases are essential for nonsymmorphic operations. All
 equivalent mappings, including operations preserving a representative q, are
 averaged. Time reversal is also used when the electronic k mesh is invariant
 under k to -k. The log reports the number of representatives and response solves.
-The response still uses the full electronic k mesh. Atomic displacement responses
-are reduced by the little group of each q by default. Their symmetry images,
+Atomic displacement responses are reduced by the little group of each q by default. Their symmetry images,
 including complex cell phases and antiunitary time reversal, span the Cartesian
 displacement space; the remaining force-matrix columns are reconstructed by
 linear algebra. Set `phonon-dfpt-displacement-symmetries no` to solve all directions.
 Set `phonon-dfpt-symmetries no` to calculate every q for a comparison.
+
+Set `phonon-dfpt-k-symmetries yes` (default no) to also reduce the electronic response mesh
+for each Cartesian displacement. Orbit weights enter the response equations;
+the induced density is averaged with the displacement's symmetry character.
+Full-mesh wavefunction responses are reconstructed with band sewing matrices
+before force contractions, including arbitrary gauges in degenerate bands.
+For metals the physical response is transformed and contracted directly, so
+truncated degenerate empty-band projectors need not match. Representatives are
+distributed among MPI ranks. Ground-state
+and offset-state setup still use the full mesh. This reduction currently uses
+translation-free operations that preserve q exactly, fix the displaced atom
+without a cell shift, and map its direction to itself or its negative. Other
+operations retain the full response mesh. Disabling q symmetries also disables
+this reduction; electron-phonon export uses explicit full-mesh responses.
+
+`phonon-dfpt-solver nested` selects fixed-potential Sternheimer solves with outer
+response-potential mixing, following the main structure of QE's DFPT solver.
+The inner accuracy tightens as the coupled residual decreases, and each outer
+iteration solves a correction about the previous response. Independent band
+CG removes converged bands from subsequent Hamiltonian calls and uses a kinetic
+preconditioner; nonpositive curvature or an inner iteration limit triggers a
+MINRES solve. A regularized DIIS history mixes the induced potentials. Both
+solver choices verify the same coupled response residual and Gamma charge
+constraint. Set `phonon-dfpt-mixing 0.4 8 80` to specify the mixing fraction,
+history length, and outer iteration limit (shown here with their defaults).
+The default remains `phonon-dfpt-solver coupled`: nested iteration is not faster
+for every material or mesh, so compare timings for the intended calculation.
 
 The ground-state SCF can use a symmetry-reduced k mesh. Save its `State` and
 `Fillings`, then replace `initial-state` in the DFPT input with:
@@ -95,7 +121,24 @@ reconstruction and Fourier transformation. Only the first group writes dumps,
 and the final phonon matrices are written once. A failure in a group aborts the
 parent calculation. The default is one q group. Atomic displacement directions
 are still sequential within each group; GPU and CPU threads accelerate local
-plane-wave operations.
+plane-wave operations. By default, representatives are assigned to groups by
+estimated work (response count and off-mesh offset-state work), with larger
+groups receiving more work. All displacements at a q stay together to preserve
+offset-state and perturbation caches. The estimates are heuristics, not measured
+execution times. `phonon-dfpt-balance-q-groups no` restores round-robin assignment.
+
+Frozen-ground-state XC derivatives are reused across displacements at each q.
+Bare displacement potentials are constructed once per sign and displacement,
+rather than once for every electronic k point. Displacement source vectors are
+also cached for reuse in force-matrix contractions. Their additional retained
+storage is limited to 128 MiB per MPI rank by default; set
+`phonon-dfpt-source-cache-size <MiB>` to change this limit. Zero disables source
+storage while retaining the potential and XC caches. Cache admission uses the
+largest rank's allocation so all ranks take the same collective paths, including
+the metallic Gamma charge projection. All caches are released after the q point.
+`phonon-dfpt-cache no` disables these caches for numerical validation. The log
+reports source builds, hits and retained storage. Caching changes neither the
+response equations nor their convergence thresholds.
 
 For commensurate k +/- q points already on the electronic mesh, stored states
 are copied from the converged ground state, including reciprocal wrapping. The
@@ -243,6 +286,12 @@ Validation is available through CTest (`dfptEwaldSolver`, `dfptInterpolation`,
 matrices with explicit solves on an anisotropic q grid and checks the Fourier
 round trip. `dfptQParallel` additionally compares MPI q-group configurations,
 including unequal and idle groups, end-state dumps and group failure handling.
+`dfptMainSpeedups` and `dfptMainSpeedupsNb` compare full-mesh coupled, reduced-k,
+nested, and combined response calculations. `dfptMainSpeedupsNbMPI` also checks
+unequal MPI groups and Gamma charge conservation; `dfptKSymmetryNbDense` covers
+truncated degenerate empty bands on a 64-point Nb mesh. `dfptFrozenCache` and its
+Nb/MPI variants check cache budgets and cached/uncached force matrices. These
+tests record timings without requiring a speedup on every machine.
 `DFPT_H_PSEUDO` is a CMake cache path to
 `H_ONCV_PBE.upf` for the physical response regression. To additionally compare an
 uneven MPI distribution against serial results:
