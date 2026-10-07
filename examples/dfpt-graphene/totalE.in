@@ -1,0 +1,7 @@
+include common.in
+symmetries automatic
+
+electronic-scf nIterations 300 #energyDiffThreshold 1e-12 alphaTstart 0.1
+converge-empty-states yes
+dump-name totalE.$VAR
+dump End State BandEigs Fillings EigStats Momenta Kpoints #Vscloc ElecDensity

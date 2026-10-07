@@ -1585,8 +1585,7 @@ void PerturbationSolver::getdVsclocPsi(const complexScalarFieldArray dn, complex
 	// Hartree term:
 	complexScalarFieldTilde dVsclocTilde;
 	
-	assert(e.coulombParams.geometry == CoulombParams::Geometry::Periodic);
-	dVsclocTilde = -4*M_PI*Linv(O(dnTilde), q);
+	dVsclocTilde = e.coulomb->applyBloch(dnTilde,*q);
 
 	if(e.exCorr.needFiniteDifference_dVxc())
 		die("Finite-q response requires an analytic LDA/GGA XC kernel.\n");
@@ -1655,7 +1654,9 @@ void PerturbationSolver::getdVsclocTau(ScalarFieldArray& dVscloc, ScalarFieldArr
 		auto sp = iInfo.species[m.sp];
 		sp->updateLocal(pInfo.datom->Vlocps, rhoIon, nChargeball, nCoreTilde, tauCoreTilde, m.at);
 		
-		//Add long-range part to Vlocps and smoothen rhoIon:
+		ScalarFieldTilde derivative=-D(pInfo.datom->Vlocps,m.dirCartesian)
+			+(*e.coulomb)(-D(rhoIon,m.dirCartesian),Coulomb::PointChargeRight);
+		// Retain the total undisplaced potential for commensurate response bookkeeping.
 		pInfo.datom->Vlocps += (*(e.coulomb))(rhoIon, Coulomb::PointChargeRight);
 		assert(!(iInfo.computeStress and iInfo.ionWidth));
 		//rhoIon = gaussConvolve(rhoIon, ionWidth);
@@ -1673,7 +1674,7 @@ void PerturbationSolver::getdVsclocTau(ScalarFieldArray& dVscloc, ScalarFieldArr
 		}
 		
 		for(unsigned s=0; s<eVars.Vscloc.size(); s++)
-			dVscloc[s] += -Jdag(O(D(pInfo.datom->Vlocps, m.dirCartesian)), true);
+			dVscloc[s] += Jdag(O(derivative), true);
 	}
 
 	e.symm.symmetrize(dVscloc);
@@ -1695,7 +1696,7 @@ void PerturbationSolver::getdVsclocTau(complexScalarFieldArray& dVscloc, int qsi
 		{
 			const AtomicMode& m = pInfo.datom->mode;
 			auto sp = iInfo.species[m.sp];
-			dVscloc[s] += Jdag(O(ionicDerivative(sp->getLocalPotential(qvec,m.at),qvec,m.dirCartesian)),true);
+			dVscloc[s] += Jdag(O(sp->getLocalPotential(qvec,m.at,&m.dirCartesian)),true);
 		}
 
 		
@@ -1705,8 +1706,8 @@ void PerturbationSolver::getdVsclocTau(complexScalarFieldArray& dVscloc, int qsi
 		}
 		
 		if (pInfo.drhoExt) {
-			if (qsign == 1) dVscloc[s] += Jdag(O(-4*M_PI*Linv(O(pInfo.drhoExt->drhoExtpq), &qvec)), true);
-			else if (qsign == -1) dVscloc[s] += Jdag(O(-4*M_PI*Linv(O(pInfo.drhoExt->drhoExtmq), &qvec)), true);
+			if (qsign == 1) dVscloc[s] += Jdag(O(e.coulomb->applyBloch(pInfo.drhoExt->drhoExtpq,qvec)), true);
+			else if (qsign == -1) dVscloc[s] += Jdag(O(e.coulomb->applyBloch(pInfo.drhoExt->drhoExtmq,qvec)), true);
 		}
 	}
 

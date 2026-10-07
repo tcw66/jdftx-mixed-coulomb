@@ -7,7 +7,9 @@ charge is treated with an isolated Wigner–Seitz Coulomb kernel.
 
 This build also adds primitive-cell density-functional perturbation theory
 (DFPT) phonons for insulators and metals, Fourier interpolation of phonon
-dispersions, and screened electron–phonon matrix elements. These capabilities
+dispersions, and screened electron–phonon matrix elements in the native
+phonon/Wannier format. DFPT supports periodic and slab Coulomb, including slab
+embedding, for phonons and electron–phonon coupling. These capabilities
 run through `jdftx` or `jdftx_gpu` and use the primitive-cell electronic FFT grid.
 
 The mixed Coulomb implementation includes:
@@ -37,7 +39,7 @@ A one-shot potential does not make its supplied density self-consistent.
 `phonon-dfpt Nq0 Nq1 Nq2` computes the Cartesian force matrices on a
 Gamma-centered coarse q mesh, Fourier transforms them to lattice space, and
 writes matrices for interpolation at arbitrary q. No electronic supercell is
-required. The electronic k mesh and phonon q mesh can be chosen independently;
+required. For phonon-only runs, the electronic k mesh and phonon q mesh can be chosen independently;
 states at k+q and k−q are generated automatically in the ground-state potential.
 The existing supercell `phonon` executable remains available for finite-difference
 calculations and comparison.
@@ -69,7 +71,6 @@ Then use a separate DFPT input with the same electronic settings:
 ```text
 include common.in
 symmetries none
-coulomb-interaction periodic
 phonon-dfpt-initial-state 01-scf.in scf.$VAR
 electronic-minimize nIterations 500 energyDiffThreshold 1e-13
 perturb-minimize nIterations 500 algorithm MINRES \
@@ -83,7 +84,9 @@ Run SCF before DFPT, from the directory containing the inputs. The
 `phonon-dfpt-initial-state` command unfolds symmetry-reduced SCF wavefunctions
 onto the full electronic mesh. The original SCF input and checkpoint must match
 the DFPT geometry, pseudopotentials, cutoff, band count, smearing and compatible
-weighted k mesh. Paths resolve from the calculation working directory. For an
+weighted k mesh, Coulomb geometry, embedding settings and FFT grid.
+Include the same `kpoint-folding` in both inputs: the restart command does not
+inherit the electronic mesh. Paths resolve from the calculation working directory. For an
 existing full-mesh checkpoint, use `initial-state scf.$VAR` instead. DFPT still
 polishes the ground state before solving the responses.
 
@@ -94,7 +97,8 @@ Complete examples are provided for:
 | [Silicon phonons](examples/dfpt-silicon/README.md) | Insulating SCF, coarse q mesh, interpolated dispersion, checks and plots |
 | [Aluminum phonons](examples/dfpt-aluminum/README.md) | Symmetry-reduced SCF and metallic DFPT with empty bands |
 | [BCC niobium input](examples/dfpt-niobium/results_dfpt/02-dfpt.in) | Metallic DFPT with response k-point reduction, nested solves and a standalone BCC dispersion plotter |
-| [Silicon electron–phonon coupling](examples/dfpt-silicon-electron-phonon/README.md) | Fresh SCF including conduction bands, screened derivatives and mode couplings |
+| [Graphene phonons and coupling](examples/dfpt-graphene/README.md) | Slab truncation with embedding, metallic DFPT and native Wannier matrix output |
+| [Silicon electron–phonon coupling](examples/dfpt-silicon-electron-phonon/README.md) | Fresh SCF including conduction bands, native matrix output and Wannier interpolation |
 
 For example, from the repository root:
 
@@ -106,6 +110,34 @@ The silicon runner accepts `--jdftx-bin ./build-gpu/jdftx_gpu`, `--pseudo`,
 `--kgrid`, `--qgrid`, `--launcher`, and `--q-groups` overrides. Python 3 and
 NumPy are required for interpolation; Matplotlib is needed for plots. Example
 parameters are starting values for convergence studies.
+
+### Slab truncation and embedding for 2D materials
+
+Put the Coulomb settings in the shared `common.in` so SCF and DFPT agree:
+
+```text
+coulomb-interaction Slab 001
+kpoint-folding 12 12 1
+# Optional embedding, for a slab centered at z=0:
+coulomb-truncation-embed 0 0 0
+```
+
+Use `phonon-dfpt 6 6 1` for this example. The q-grid dimension along the
+truncated direction must be 1; phonon wavevectors lie in the periodic plane.
+All three Cartesian displacement directions are included, so out-of-plane
+phonons are computed too. Phonon-only runs can use independent in-plane k/q
+meshes; native electron–phonon export requires the electronic mesh to contain
+the phonon grid.
+
+Embedding centers use the coordinate system selected by `coords-type`.
+Keep the same center, `coulomb-truncation-ion-margin` and FFT grid in SCF and
+DFPT, and provide sufficient vacuum for the density and ion margin. The response
+uses the slab Bloch Hartree kernel, an analytic 2D Ewald ionic Hessian, and,
+with embedding, the doubled slab grid and Gaussian ionic range separation.
+External electric fields and fluid embedding are unsupported.
+
+The [graphene example](examples/dfpt-graphene/README.md) provides shared slab
+settings, a symmetry-reduced SCF restart and a 6×6×1 phonon/Wannier grid.
 
 ### Symmetry, response solvers and parallelism
 
@@ -220,17 +252,17 @@ energies, and the Gamma-point Fermi-level shift enforcing fixed electron number.
 Metallic force matrices are derivatives of the smeared free energy at fixed
 width; converge the k mesh, width and band count together.
 
-The primitive-cell path currently supports periodic, nonmagnetic scalar states,
-analytic LDA/GGA kernels, and nonrelativistic norm-conserving pseudopotentials
+The primitive-cell path supports periodic or slab Coulomb, including slab
+embedding, with nonmagnetic scalar states, analytic LDA/GGA kernels, and nonrelativistic norm-conserving pseudopotentials
 without nonlinear core corrections, such as suitable SG15 potentials. Ultrasoft
 potentials, nonlinear core corrections, spin polarization/spinors, exact exchange,
 DFT+U, meta-GGAs, fluids, vdW pair corrections, fixed chemical potential, MP1 and
 Cold smearing are unsupported. Ionic/lattice optimization must be performed in
 a separate calculation.
 
-**DFPT phonons currently require periodic Coulomb and cannot be combined with
-the defect-only mixed slab truncation described above.** Born effective charges
-and long-range polar corrections are not implemented, so ordinary Fourier
+DFPT cannot be combined with the defect-only mixed slab correction described
+above. Ordinary slab truncation and its Coulomb embedding are supported. Born
+effective charges and long-range polar corrections are not implemented, so ordinary Fourier
 interpolation does not recover the directional LO–TO limit at Gamma in polar
 crystals.
 
@@ -282,50 +314,78 @@ Add the following to a DFPT phonon input:
 phonon-dfpt-electron-phonon yes
 ```
 
-The export contains the screened Cartesian Hamiltonian derivatives
-`<psi_m,k+q | dH_SCF/du_a(q) | psi_n,k>`, including ionic local and nonlocal
-pseudopotential derivatives and the induced Hartree/XC potential. Raw matrices
-are in Hartree/bohr, without occupation, k-weight, mass or zero-point factors.
-All stored bands are included. To include conduction bands, prepare a fresh SCF
-checkpoint with Fermi/Gauss smearing and additional bands, keeping those settings
-identical in DFPT; the existing four-band silicon checkpoints cannot supply
-extra conduction states.
+The export uses exactly the `phononHsub` format consumed by the existing
+JDFTx Wannier executable. It includes ionic local and nonlocal pseudopotential
+derivatives and the screened Hartree/XC potential. Periodic and slab Coulomb,
+including slab embedding, are supported.
 
-Electron–phonon export currently solves every q and Cartesian displacement
-on the full electronic response mesh, overriding q, displacement and electronic
-response symmetry reductions. Offset reuse,
-symmetry-reduced SCF unfolding and MPI q groups remain available. Storage for
-the raw matrices is `16 * Nq * Nk * (3 * Natoms) * Nbands²` bytes plus metadata.
-This option can substantially increase work compared with phonon-only runs.
+The electronic mesh must be Gamma centered and contain the phonon q grid:
+each `kpoint-folding` dimension must be divisible by the corresponding
+`phonon-dfpt` dimension. For graphene, `kpoint-folding 12 12 1` and
+`phonon-dfpt 6 6 1` satisfy this requirement. The file stores only the 36
+electronic k points commensurate with that phonon supercell; the response still
+integrates over the full 144-point electronic mesh.
 
-The additional files are `phonon.phononEph` (manifest),
-`phonon.phononEphQ000000`, `phonon.phononEphQ000001`, etc. (complex128 Cartesian
-derivatives), and matching `.meta` files (q, k, k+q, integration weights and band
-energies). Convert them to phonon-mode couplings from the repository root:
+All stored electronic bands are included. To include conduction states, prepare
+a fresh SCF checkpoint with Fermi/Gauss smearing and additional bands, keeping
+those settings identical in DFPT. Electron–phonon export explicitly solves every
+q and Cartesian displacement on the full electronic response mesh, overriding
+q, displacement and response k-point symmetry reductions. Offset reuse,
+symmetry-reduced SCF unfolding and MPI q groups remain available. Q groups
+synchronize electronic phases and degenerate-band rotations, then write disjoint
+blocks of one matrix file.
 
-```bash
-python3 jdftx/scripts/electronPhononDFPT /path/to/results/phonon. -o electron-phonon
+With `dump-name phonon.$VAR`, the additional output is:
+
+| Output | Contents |
+| --- | --- |
+| `phonon.phononHsub` | Native complex128 matrices: Cartesian mode, target k, source k, then column-major band matrix; rows are final bands, columns initial bands |
+| `phonon.phononKpts` | Ordered electronic k subset commensurate with the phonon grid, in centered reciprocal coordinates |
+| `phonon.wfns`, `phonon.eigenvals`, `phonon.fillings` | Matching eigenvectors, band energies and occupations for the full electronic mesh, saved even with `dump End None` |
+
+The existing `phonon.phononBasis` provides mass-weighted Cartesian directions
+and atomic masses. For mode a, the matrix file contains
+`<psi_m,k_target | dH_SCF/du_a(q) | psi_n,k_source> / (Nq * sqrt(M_a))`,
+where q = k_target − k_source, the unit displacement is in bohrs and M is in
+electron masses. This includes the native mass factor and the 1/Nq supercell
+normalization of a displacement localized in one cell. Occupations, electronic
+integration weights and phonon zero-point factors are not included. Matrix
+storage is `16 * (3 * Natoms) * Nq² * Nbands²` bytes. The former `phononEph`
+manifest, per-q files and their converter have been retired.
+
+### Wannier interpolation
+
+Use the same cell, ions, pseudopotentials, cutoff, electronic mesh and band count
+in the Wannier input, together with the trial orbitals and band windows for your
+material. For the graphene grid above, include:
+
+```text
+symmetries none
+wannier phononSupercell 6 6 1
+wannier-initial-state phonon.$VAR
+wannier-dump-name wannier.$VAR
 ```
 
-Each q produces an NPZ with complex `g[k, mode, final_band, initial_band]`, band
-energies and signed phonon energies in **meV** by default. Mass weighting and
-zero-point normalization are included in `g`. `--units eV` or `--units Hartree`
-changes the energy unit; `--q-index 1` selects a computed q, and `--bands 0 8`
-selects zero-based bands 0 through 7. Raw Cartesian derivatives and phonon
-eigenvectors are also stored. Imaginary, zero and positive frequencies below
-the default 0.01 meV threshold have NaN couplings; use `valid_modes` when summing.
-The threshold is adjustable with `--min-frequency-meV`.
+`phononSupercell` must match `phonon-dfpt`. Use the **DFPT output prefix** for
+`wannier-initial-state`: its saved eigenvectors have exactly the electronic gauge
+used in `phononHsub`. The input SCF checkpoint may have a different gauge.
+Run the existing Wannier executable from the calculation directory:
 
-These are coarse-mesh Bloch matrix elements. Arbitrary-q phonon interpolation
-remains available, but electron–phonon interpolation needs electronic gauge
-alignment and is not implemented by this converter. Individual matrix entries
-depend on electronic phases and degenerate-subspace rotations; include complete
-degenerate multiplets when comparing subspace sums across runs. The export is
-distinct from the supercell `phononHsub` format consumed by the existing Wannier
-driver.
+```bash
+/path/to/build/wannier -i wannier.in -o wannier.out
+# Or /path/to/build-gpu/wannier_gpu for CUDA.
+```
 
-See the [DFPT method and format guide](jdftx/doc/tutorials/phonon/DFPT.dox)
-for response equations, phase conventions, normalization and full output details.
+Wannier reads `phononHsub` and `phononBasis`, applies its usual translational
+correction and band rotations, and writes `wannier.mlwfHePh` with the phonon
+cell maps and weights needed for real-space interpolation. No file-format
+conversion is required. Mode-resolved scattering couplings require contraction
+with phonon eigenvectors and the zero-point factor after interpolation.
+
+The [silicon coupling example](examples/dfpt-silicon-electron-phonon/README.md)
+includes a complete valence-bond Wannier input. See the
+[DFPT method and format guide](jdftx/doc/tutorials/phonon/DFPT.dox) for phase
+conventions, normalization and supported features.
 
 ## Build
 
@@ -334,7 +394,8 @@ BLAS/LAPACK, and MPI for the default configuration), then build from this root:
 
 ```bash
 cmake -S jdftx -B build
-cmake --build build --parallel --target jdftx ConstructDefectPotential TestDefectCoulomb
+cmake --build build --parallel --target jdftx wannier phonon \
+    ConstructDefectPotential TestDefectCoulomb
 ```
 
 Use `build/jdftx` for the modified SCF calculation and
@@ -353,7 +414,8 @@ To configure and build the GPU versions, install CUDA and use:
 
 ```bash
 cmake -S jdftx -B build-gpu -DEnableCUDA=ON -DEnableMPI=ON
-cmake --build build-gpu --parallel --target jdftx_gpu ConstructDefectPotential_gpu TestDefectCoulomb_gpu
+cmake --build build-gpu --parallel --target jdftx_gpu wannier_gpu phonon_gpu \
+    ConstructDefectPotential_gpu TestDefectCoulomb_gpu
 ```
 
 The existing `build-gpu` in this workspace uses CUDA architecture 89 for the
@@ -392,10 +454,20 @@ and Gamma charge conservation. `dfptKSymmetryNbDense` tests a 64-point Nb mesh
 with truncated degenerate empty-band subspaces. `dfptFrozenCache` and its Nb/MPI
 variants check cache budgets and cached/uncached force matrices. Performance
 tests record timings without requiring a speedup on every machine.
-Electron–phonon tests compare
-screened diagonal band derivatives with independent SCF finite differences,
-check q/−q reciprocity and mass/frequency normalization, exercise off-mesh target
-states, and compare complete-band-subspace coupling norms across MPI q groups.
+`dfptResponseSlab` / `dfptResponseSlabLDA` and
+`dfptResponseEmbeddedSlab` / `dfptResponseEmbeddedSlabLDA` compare in-plane and
+out-of-plane response forces against independent supercell finite differences,
+including fractional embedding centers and symmetry-reduced SCF restarts.
+Electron–phonon tests check native file dimensions and centered k ordering,
+mass/supercell normalization, screened band derivatives against independent
+SCF finite differences, full complex matrices against native frozen phonons,
+and an actual Wannier export. `dfptElectronPhononEmbeddedSlab` covers embedding;
+`dfptElectronPhononMPI` checks complex reciprocity across q groups and compares
+the resulting Wannier couplings. Incompatible native-export meshes are rejected.
+Phonon-only off-mesh q calculations remain supported. Set `JDFTX_BINARY` and
+`WANNIER_BINARY` to the CUDA executable paths when running
+`jdftx/test/dfpt/checkElectronPhonon.py` against the CPU build/pseudopotential
+arguments to check GPU DFPT and Wannier output too.
 
 CPU and CUDA response checks and MPI q-group checks have passed in this
 workspace. The example inputs still require physical convergence studies for

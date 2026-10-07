@@ -53,7 +53,8 @@ struct CoulombSlab_calc
 	CoulombSlab_calc(int iDir, double hlfL) : iDir(iDir), hlfL(hlfL) {}
 	__hostanddev__ double operator()(const vector3<int>& iG, const matrix3<>& GGT) const
 	{	double Gsq = GGT.metric_length_squared(iG);
-		double Gplane = Gsq - GGT(iDir,iDir) * iG[iDir]*iG[iDir]; //G along the non-truncated directions
+		vector3<int> iGplane=iG; iGplane[iDir]=0;
+		double Gplane = GGT.metric_length_squared(iGplane); //avoid cancellation for purely normal G
 		Gplane = Gplane>0. ? sqrt(Gplane) : 0.; //safe sqrt to prevent NaN from roundoff errors
 		return (4*M_PI) * (Gsq ? (1. - exp(-Gplane*hlfL) * cos(M_PI*iG[iDir]))/Gsq : -0.5*hlfL*hlfL);
 	}
@@ -79,6 +80,50 @@ struct CoulombSlab_calc
 		}
 	}
 };
+
+//! Unregularized Bloch Hartree kernel for periodic or non-embedded slab response.
+//! iDir < 0 selects periodic Coulomb; slab q must lie in the periodic plane.
+struct CoulombBloch_calc
+{
+	int iDir; double hlfL;
+	CoulombBloch_calc(int iDir, double hlfL) : iDir(iDir), hlfL(hlfL) {}
+	__hostanddev__ double operator()(const vector3<>& k, const matrix3<>& GGT) const
+	{
+		double kSq=GGT.metric_length_squared(k);
+		if(iDir<0) return kSq ? 4*M_PI/kSq : 0.;
+		if(!kSq) return -2*M_PI*hlfL*hlfL;
+		vector3<> plane=k; plane[iDir]=0.;
+		double x=hlfL*sqrt(fmax(0.,GGT.metric_length_squared(plane)));
+		// Integer normal components: cos(pi*n)=(-1)^n. expm1 retains the
+		// physical 2D 1/|q| limit for small planar wavevectors at n=0.
+		bool odd=(int(round(k[iDir]))%2)!=0;
+		return 4*M_PI*(odd ? 1.+exp(-x) : -expm1(-x))/kSq;
+	}
+};
+//! Gaussian long-range and complementary short-range point-charge factors.
+struct CoulombBlochIon_calc
+{
+	double expFac; bool shortRange;
+	CoulombBlochIon_calc(double width, bool shortRange) : expFac(0.5*width*width), shortRange(shortRange) {}
+	__hostanddev__ double operator()(const vector3<>& k, const matrix3<>& GGT) const
+	{
+		double kSq=GGT.metric_length_squared(k);
+		if(!shortRange) return exp(-expFac*kSq);
+		return 4*M_PI*(kSq ? -expm1(-expFac*kSq)/kSq : expFac);
+	}
+};
+void coulombBlochIon(vector3<int> S, const matrix3<>& GGT, const CoulombBlochIon_calc& calc,
+	complex* data, const vector3<>& q);
+#ifdef GPU_ENABLED
+void coulombBlochIon_gpu(vector3<int> S, const matrix3<>& GGT, const CoulombBlochIon_calc& calc,
+	complex* data, const vector3<>& q);
+#endif
+void coulombBloch(vector3<int> S, const matrix3<>& GGT, const CoulombBloch_calc& calc,
+	complex* data, const vector3<>& q);
+#ifdef GPU_ENABLED
+void coulombBloch_gpu(vector3<int> S, const matrix3<>& GGT, const CoulombBloch_calc& calc,
+	complex* data, const vector3<>& q);
+#endif
 
 //! Sphere-truncated coulomb interaction
 struct CoulombSpherical_calc

@@ -40,7 +40,7 @@ output definitions. The implementation follows Sec. II.C.4 of
 To export screened electron-phonon matrix elements, add
 `phonon-dfpt-electron-phonon yes` to `02-dfpt.in`. This explicitly solves all q
 points and displacement directions; offset reuse and q groups remain available.
-After completion, run
-`python3 ../../jdftx/scripts/electronPhononDFPT phonon. -o electron-phonon`.
-The NPZ files contain mode-resolved complex couplings and band/phonon energies
-in meV. They evaluate the coarse mesh; electronic gauge interpolation is separate.
+This writes native `phononHsub`, `phononKpts` and matching electronic states.
+Use `wannier-initial-state phonon.$VAR` and `wannier phononSupercell` with the
+DFPT q-grid dimensions to output interpolatable `mlwfHePh` matrix elements.
+The electronic mesh must be Gamma centered and contain the phonon grid.

@@ -138,6 +138,14 @@ public:
 	//! Apply Coulomb kernel (parameters same as destructible input version above)
 	ScalarFieldTilde operator()(const ScalarFieldTilde&, PointChargeMode pointChargeMode=PointChargeNone) const;
 
+	//! Apply the unregularized Hartree kernel to a Bloch density (periodic or
+	//! slab, with q in the periodic plane). Includes embedding and ionic range
+	//! separation when requested. Distinct from the regularized exchange kernel.
+	complexScalarFieldTilde applyBloch(const complexScalarFieldTilde& in, const vector3<>& q,
+		PointChargeMode pointChargeMode=PointChargeNone) const;
+	//! Same kernel evaluated at a fractional reciprocal vector G+q.
+	double blochKernel(const vector3<>& k) const;
+
 	//! Gaussian width used for embedded point-charge range separation (zero without embedding).
 	double getIonWidth() const { return params.embed ? ionWidth : 0.; }
 	
@@ -197,6 +205,7 @@ private:
 	GridInfo gInfoEmbed; //!< embedding grid - internal object initialized only if params.embed == true
 	const vector3<>& xCenter; //!< meshCenter in original grid lattice coordinates
 	ScalarFieldTilde centerToO, centerFromO; //!< translation operators that take center to / from origin
+	complexScalarFieldTilde centerToOReal, centerFromOReal; //!< exact complex extensions of the real-grid translations (including Nyquist planes)
 	vector3<> embedScale; //!< lattiec coordinates scale factor for moving from original to embedding mesh
 	IndexArray embedIndex; //!< list of indices from original mesh to larger mesh
 	std::vector< std::pair<int,IndexArray> > symmIndex; //!< list of number of equivalence classes and corresponding indices per cardinality for boundary symmetrization
@@ -205,9 +214,9 @@ private:
 	std::shared_ptr<RealKernel> ionKernel;
 	matrix3<> getIonKernelLatticeGradient(const ScalarFieldTilde& X, const ScalarFieldTilde& Y) const;
 	ScalarFieldTilde embedExpand(const ScalarFieldTilde& in) const; //!< expand to embedding grid and symmetrize boundaries
-	complexScalarFieldTilde embedExpand(const complexScalarFieldTilde& in) const; //!< expand to embedding grid and symmetrize boundaries
+	complexScalarFieldTilde embedExpand(const complexScalarFieldTilde& in, bool realTranslation=false) const; //!< expand to embedding grid and symmetrize boundaries
 	ScalarFieldTilde embedShrink(const ScalarFieldTilde& in) const; //!< symmetrize boundaries and shrink to original grid (dagger of embedExpand)
-	complexScalarFieldTilde embedShrink(complexScalarFieldTilde&& in) const; //!< symmetrize boundaries and shrink to original grid (dagger of embedExpand)
+	complexScalarFieldTilde embedShrink(complexScalarFieldTilde&& in, bool realTranslation=false) const; //!< symmetrize boundaries and shrink to original grid (dagger of embedExpand)
 	friend struct FluidSolver;
 	friend struct SlabEpsilon;
 	friend struct ChargedDefect;

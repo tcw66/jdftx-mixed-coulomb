@@ -22,6 +22,27 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include <core/LoopMacros.h>
 
 
+template<typename Calc> __global__ void coulombBloch_kernel(int zBlock, vector3<int> S, matrix3<> GGT,
+	Calc calc, complex* data, vector3<> q)
+{ COMPUTE_fullGindices
+	data[i] *= calc(iG+q,GGT);
+}
+void coulombBloch_gpu(vector3<int> S, const matrix3<>& GGT, const CoulombBloch_calc& calc,
+	complex* data, const vector3<>& q)
+{
+	GpuLaunchConfig3D glc(coulombBloch_kernel<CoulombBloch_calc>,S);
+	for(int zBlock=0; zBlock<glc.zBlockMax; zBlock++)
+		coulombBloch_kernel<CoulombBloch_calc><<<glc.nBlocks,glc.nPerBlock>>>(zBlock,S,GGT,calc,data,q);
+}
+
+void coulombBlochIon_gpu(vector3<int> S, const matrix3<>& GGT, const CoulombBlochIon_calc& calc,
+	complex* data, const vector3<>& q)
+{
+	GpuLaunchConfig3D glc(coulombBloch_kernel<CoulombBlochIon_calc>,S);
+	for(int zBlock=0; zBlock<glc.zBlockMax; zBlock++)
+		coulombBloch_kernel<CoulombBlochIon_calc><<<glc.nBlocks,glc.nPerBlock>>>(zBlock,S,GGT,calc,data,q);
+}
+
 template<typename Coulomb_calc> __global__
 void coulombAnalytic_kernel(int zBlock, vector3<int> S, const matrix3<> GGT, const Coulomb_calc calc, complex* data)
 {	COMPUTE_halfGindices

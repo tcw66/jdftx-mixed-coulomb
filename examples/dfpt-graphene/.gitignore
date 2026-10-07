@@ -1,0 +1,5 @@
+# Generated electronic checkpoint metadata (other outputs are ignored globally).
+*.eigStats
+*.kMap
+*.kPts
+*.momenta

@@ -91,8 +91,14 @@ void PerturbationInfo::setup(const Everything &e, const ElecVars &eVars)
 			if(sp->isUltrasoft() || sp->isRelativistic() || sp->hasCoreDensity())
 				die("phonon-dfpt requires nonrelativistic norm-conserving potentials without nonlinear core corrections.\n");
 		if(!solverParams.nIterations) die("phonon-dfpt requires perturb-minimize nIterations > 0.\n");
-		if(e.symm.mode!=SymmetriesNone || e.coulombParams.geometry!=CoulombParams::Periodic)
-			die("phonon-dfpt requires symmetries none and periodic Coulomb.\n");
+		if(e.symm.mode!=SymmetriesNone)
+			die("phonon-dfpt requires symmetries none.\n");
+		if(e.coulombParams.geometry!=CoulombParams::Periodic && e.coulombParams.geometry!=CoulombParams::Slab)
+			die("phonon-dfpt requires periodic or slab Coulomb.\n");
+		if(e.coulombParams.embedFluidMode || e.coulombParams.Efield.length_squared())
+			die("phonon-dfpt does not support fluid embedding or external electric fields.\n");
+		if(e.coulombParams.geometry==CoulombParams::Slab && phononGrid[e.coulombParams.iDir]!=1)
+			die("Slab phonon-dfpt requires q-grid dimension 1 along the truncated direction.\n");
 		if(e.iInfo.vdWenable || e.iInfo.nChargeball || e.cntrl.fixed_H || e.cntrl.dumpOnly || e.ionicDynParams.nSteps || e.ionicMinParams.nIterations || e.latticeMinParams.nIterations || e.vibrations)
 			die("phonon-dfpt does not support vdW, chargeballs, fixed potentials or ionic/lattice optimization in the same run.\n");
 		if(e.exCorr.needFiniteDifference_dVxc()) die("phonon-dfpt requires an analytic LDA/GGA XC kernel.\n");
@@ -365,8 +371,12 @@ void PerturbationInfo::checkSupportedFeatures(const Everything &e, const ElecInf
 			if(sp->hasCoreDensity()) die("Finite-q atomic response does not yet support nonlinear core corrections.\n");
 	if (e.eVars.n.size() > 1)
 		die("Multiple spin channels not supported yet.\n");
-	if (e.coulombParams.geometry != CoulombParams::Geometry::Periodic && !commensurate)
-		die("Periodic Coulomb interaction required for incommensurate perturbations.\n")
+	if(!commensurate) {
+		if(e.coulombParams.embedFluidMode || (e.coulombParams.geometry!=CoulombParams::Periodic && e.coulombParams.geometry!=CoulombParams::Slab))
+			die("Finite-q response requires periodic or slab Coulomb without fluid embedding.\n");
+		if(e.coulombParams.geometry==CoulombParams::Slab && fabs(qvec[e.coulombParams.iDir])>1e-12)
+			die("Slab finite-q response requires q in the periodic plane.\n");
+	}
 		
 	if (e.symm.mode != SymmetriesNone)
 	{

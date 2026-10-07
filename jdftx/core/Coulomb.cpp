@@ -163,11 +163,11 @@ ScalarFieldTilde Coulomb::embedExpand(const ScalarFieldTilde& in) const
 	return J(out);
 }
 
-complexScalarFieldTilde Coulomb::embedExpand(const complexScalarFieldTilde& in) const
+complexScalarFieldTilde Coulomb::embedExpand(const complexScalarFieldTilde& in, bool realTranslation) const
 {	assert(params.embed);
 	assert(&(in->gInfo) == &gInfoOrig);
 	complexScalarField out; nullToZero(out, gInfo);
-	callPref(eblas_scatter_zdaxpy)(gInfoOrig.nr, 1., embedIndex.dataPref(), I(Complex(centerToO) * in)->dataPref(), out->dataPref());
+	callPref(eblas_scatter_zdaxpy)(gInfoOrig.nr, 1., embedIndex.dataPref(), I((realTranslation ? centerToOReal : Complex(centerToO)) * in)->dataPref(), out->dataPref());
 	boundarySymmetrize(symmIndex, out->dataPref());
 	return J((complexScalarField&&)out);
 }
@@ -182,14 +182,54 @@ ScalarFieldTilde Coulomb::embedShrink(const ScalarFieldTilde& in) const
 	return centerFromO * J(out);
 }
 
-complexScalarFieldTilde Coulomb::embedShrink(complexScalarFieldTilde&& in) const
+complexScalarFieldTilde Coulomb::embedShrink(complexScalarFieldTilde&& in, bool realTranslation) const
 {	assert(params.embed);
 	assert(&(in->gInfo) == &gInfo);
 	complexScalarField Iin = I((complexScalarFieldTilde&&)in);
 	boundarySymmetrize(symmIndex, Iin->dataPref());
 	complexScalarField out; nullToZero(out, gInfoOrig);
 	callPref(eblas_gather_zdaxpy)(gInfoOrig.nr, 1., embedIndex.dataPref(), Iin->dataPref(), out->dataPref());
-	return Complex(centerFromO) * J((complexScalarField&&)out);
+	return (realTranslation ? centerFromOReal : Complex(centerFromO)) * J((complexScalarField&&)out);
+}
+
+namespace {
+CoulombBloch_calc blochCalc(const CoulombParams& params, const GridInfo& g, const vector3<>& q)
+{
+	if(params.geometry!=CoulombParams::Periodic && params.geometry!=CoulombParams::Slab)
+		die("Bloch Hartree response requires periodic or slab Coulomb.\n");
+	int dir=params.geometry==CoulombParams::Slab ? params.iDir : -1;
+	if(dir>=0 && fabs(q[dir]-round(q[dir]))>1e-12)
+		die("Slab Bloch response requires q in the periodic plane.\n");
+	return CoulombBloch_calc(dir,dir>=0 ? 0.5*g.R.column(dir).length() : 0.);
+}
+}
+
+complexScalarFieldTilde Coulomb::applyBloch(const complexScalarFieldTilde& in, const vector3<>& q,
+	PointChargeMode pointChargeMode) const
+{
+	auto calc=blochCalc(params,gInfo,q);
+	if(params.embed && (params.embedFluidMode || fabs(q[params.iDir])>1e-12))
+		die("Embedded slab Bloch response requires q in the periodic plane and no fluid embedding.\n");
+	complexScalarFieldTilde out(in->clone()), shortRange;
+	if(params.embed && pointChargeMode!=PointChargeNone) {
+		shortRange=clone(in);
+		callPref(coulombBlochIon)(gInfoOrig.S,gInfoOrig.GGT,CoulombBlochIon_calc(ionWidth,true),
+			shortRange->dataPref(false),q);
+	}
+	if(params.embed && pointChargeMode==PointChargeRight)
+		callPref(coulombBlochIon)(gInfoOrig.S,gInfoOrig.GGT,CoulombBlochIon_calc(ionWidth,false),out->dataPref(false),q);
+	if(params.embed) out=embedExpand(out,true);
+	callPref(coulombBloch)(gInfo.S,gInfo.GGT,calc,out->dataPref(false),q);
+	if(params.embed) out=embedShrink(std::move(out),true);
+	if(params.embed && pointChargeMode==PointChargeLeft)
+		callPref(coulombBlochIon)(gInfoOrig.S,gInfoOrig.GGT,CoulombBlochIon_calc(ionWidth,false),out->dataPref(false),q);
+	return out+shortRange;
+}
+
+double Coulomb::blochKernel(const vector3<>& k) const
+{
+	if(params.embed) die("Embedded Coulomb is not diagonal in G; use applyBloch.\n");
+	return blochCalc(params,gInfo,k)(k,gInfo.GGT);
 }
 
 ScalarFieldTilde Coulomb::operator()(ScalarFieldTilde&& in, PointChargeMode pointChargeMode) const
@@ -408,6 +448,11 @@ Coulomb::Coulomb(const GridInfo& gInfoOrig, const CoulombParams& params)
 		//Setup translation operators:
 		nullToZero(centerToO, gInfoOrig);   initTranslation(centerToO, -rCenter);
 		nullToZero(centerFromO, gInfoOrig); initTranslation(centerFromO, rCenter);
+		// The real-grid ground-state translations project aliased Nyquist
+		// coefficients onto their Hermitian part. DFPT must use the exact
+		// complex extension of those same real linear maps at fractional centers.
+		centerToOReal=J(Complex(I(centerToO)));
+		centerFromOReal=J(Complex(I(centerFromO)));
 		//Setup Wigner-Seitz cell of original mesh and initialize index map:
 		wsOrig = new WignerSeitz(gInfoOrig.R);
 		embedIndex.init(gInfoOrig.nr);

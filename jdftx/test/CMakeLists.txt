@@ -53,7 +53,9 @@ find_file(DFPT_H_PSEUDO H_ONCV_PBE.upf PATHS
 if(Python3_Interpreter_FOUND AND NUMPY_STATUS EQUAL 0 AND DFPT_H_PSEUDO)
 	add_test(NAME dfptElectronPhonon COMMAND ${Python3_EXECUTABLE}
 		${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkElectronPhonon.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_H_PSEUDO})
-	set_tests_properties(dfptElectronPhonon PROPERTIES TIMEOUT 300)
+	add_test(NAME dfptElectronPhononEmbeddedSlab COMMAND ${Python3_EXECUTABLE}
+		${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkElectronPhonon.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_H_PSEUDO} --embedded)
+	set_tests_properties(dfptElectronPhonon dfptElectronPhononEmbeddedSlab PROPERTIES TIMEOUT 300)
 	if(EnableMPI AND MPIEXEC_EXECUTABLE)
 		add_test(NAME dfptElectronPhononMPI COMMAND ${Python3_EXECUTABLE}
 			${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkElectronPhonon.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_H_PSEUDO}
@@ -69,6 +71,14 @@ if(Python3_Interpreter_FOUND AND NUMPY_STATUS EQUAL 0 AND DFPT_H_PSEUDO)
         ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkRestart.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_H_PSEUDO})
     add_test(NAME dfptResponse COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkResponse.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO})
+    add_test(NAME dfptResponseSlab COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkResponse.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO} gga-PBE slab)
+    add_test(NAME dfptResponseEmbeddedSlab COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkResponse.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO} gga-PBE embedded)
+    add_test(NAME dfptResponseEmbeddedSlabLDA COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkResponse.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO} lda-PZ embedded)
+    add_test(NAME dfptResponseSlabLDA COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkResponse.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO} lda-PZ slab)
     add_test(NAME dfptResponseLDA COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkResponse.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO} lda-PZ)
     if(EnableMPI AND MPIEXEC_EXECUTABLE)

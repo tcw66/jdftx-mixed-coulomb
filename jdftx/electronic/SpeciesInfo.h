@@ -156,7 +156,10 @@ public:
 		ScalarFieldTilde& nCore, ScalarFieldTilde& tauCore, int atom = -1) const; 
 	
 	//! Periodic part of local ionic potential at G+q, including the Coulomb tail.
-	complexScalarFieldTilde getLocalPotential(const vector3<>& q, int atom) const;
+	// Optional Cartesian atomic derivatives act on the source BEFORE the
+	//! embedded Coulomb operator, which is not translationally invariant.
+	complexScalarFieldTilde getLocalPotential(const vector3<>& q, int atom,
+		const vector3<>* derivDir=nullptr, const vector3<>* derivDir2=nullptr) const;
 	bool hasCoreDensity() const { return bool(nCoreRadial) || bool(tauCoreRadial); }
 
 	//! Return the local forces (due to Vlocps, rhoIon, nChargeball and nCore/tauCore)

@@ -208,7 +208,8 @@ void WannierMinimizer::saveMLWF_phonon(int iSpin)
 		}
 		else { if(mpiWorld->isHead()) H.write(fp); }
 		//collect sum rule, accounting for cell map and weights:
-		const complex* Hdata = H.dataPref();
+		// Sum-rule collection uses host-side cell maps and temporary vectors.
+		const complex* Hdata = H.data();
 		int nDataPerCell = nPhononModes*nCenters*nCenters;
 		for(const UniqueCell& cell2: uniqueCells)
 		{	for(const auto& entry1: cell1.cells)
@@ -226,10 +227,10 @@ void WannierMinimizer::saveMLWF_phonon(int iSpin)
 					{	matrix w1i = entry1.second(iAtom,iAtom+1, 0,xExpect.size());
 						matrix w2i = entry2.second(iAtom,iAtom+1, 0,xExpect.size());
 						matrix w = transpose(w1i) * w2i;
-						complex* HsumData = HsumCur.dataPref(); //summed over atoms, but not over directions
+						complex* HsumData = HsumCur.data(); //summed over atoms, but not over directions
 						for(int iVector=0; iVector<3; iVector++)
-						{	callPref(eblas_zmul)(w.nData(), w.dataPref(), 1, Hcopy, 1); //apply weights
-							callPref(eblas_zaxpy)(w.nData(), 1./invsqrtM[iMode], Hcopy, 1, HsumData, 1); //collect sum rule
+						{	eblas_zmul(w.nData(), w.data(), 1, Hcopy, 1); //apply weights
+							eblas_zaxpy(w.nData(), 1./invsqrtM[iMode], Hcopy, 1, HsumData, 1); //collect sum rule
 							Hcopy += w.nData();
 							HsumData += w.nData();
 							iMode++;

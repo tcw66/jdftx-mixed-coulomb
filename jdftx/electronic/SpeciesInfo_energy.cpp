@@ -372,12 +372,16 @@ ColumnBundle SpeciesInfo::getVatom(const ColumnBundle& Cq, int atom) const
 }
 
 
-complexScalarFieldTilde SpeciesInfo::getLocalPotential(const vector3<>& q, int atom) const
+complexScalarFieldTilde SpeciesInfo::getLocalPotential(const vector3<>& q, int atom,
+	const vector3<>* derivDir, const vector3<>* derivDir2) const
 {
 	assert(atom >= 0 && atom < int(atpos.size()));
 	const GridInfo& g = e->gInfo;
 	complexScalarFieldTilde result = complexScalarFieldTildeData::alloc(g);
 	complex* data = result->data();
+	complexScalarFieldTilde rho;
+	complex* rhoData=nullptr;
+	if(e->coulombParams.embed) {rho=complexScalarFieldTildeData::alloc(g); rhoData=rho->data();}
 	for(int ix=0; ix<g.S[0]; ix++)
 	for(int iy=0; iy<g.S[1]; iy++)
 	for(int iz=0; iz<g.S[2]; iz++)
@@ -386,8 +390,14 @@ complexScalarFieldTilde SpeciesInfo::getLocalPotential(const vector3<>& q, int a
 		for(int j=0; j<3; j++) if(2*iG[j]>g.S[j]) iG[j]-=g.S[j];
 		vector3<> K = iG + q;
 		double Ksq = g.GGT.metric_length_squared(K);
-		double potential = VlocRadial(sqrt(Ksq)) - (Ksq ? 4*M_PI*Z/Ksq : 0.);
-		data[g.fullGindex(iG)] = (potential/g.detR)*cis(-2*M_PI*dot(K,atpos[atom]));
+		double potential = VlocRadial(sqrt(Ksq));
+		if(!rhoData) potential-=Z*e->coulomb->blochKernel(K);
+		complex phase=cis(-2*M_PI*dot(K,atpos[atom]))/g.detR;
+		if(derivDir) phase*=complex(0.,-dot(K*g.G,*derivDir));
+		if(derivDir2) phase*=complex(0.,-dot(K*g.G,*derivDir2));
+		data[g.fullGindex(iG)] = potential*phase;
+		if(rhoData) rhoData[g.fullGindex(iG)] = -Z*phase;
 	}
+	if(rho) result+=e->coulomb->applyBloch(rho,q,Coulomb::PointChargeRight);
 	return result;
 }

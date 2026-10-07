@@ -1,0 +1,6 @@
+include common.in
+kpoint-folding 12 12 1
+electronic-scf
+
+dump-name latMin.$VAR
+dump End Lattice IonicPositions

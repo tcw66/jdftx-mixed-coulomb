@@ -102,6 +102,54 @@ int main(int argc,char** argv)
 			for(int b=0;b<6;b++) numerical.set(b,a,(-(sup.invRT*(plus[b/3].force-minus[b/3].force))/(2*h))[b%3]);
 		}
 		require(nrm2(F-numerical)/nrm2(numerical)<1e-7,"finite-q Ewald Hessian versus replicated-cell forces");
+		// Compare analytic slab Hessians against the independent 2D Ewald
+		// forces for every truncation direction, including buckled atoms.
+		for(int dir=0;dir<3;dir++) for(bool embedded:{false,true}) {
+			cp.geometry=CoulombParams::Slab; cp.iDir=dir; cp.ionMargin=0.5; cp.embed=embedded; cp.embedCenter=vector3<>(); if(embedded) cp.embedCenter[dir]=0.13;
+			auto slab=cp.createCoulomb(g);
+			matrix slabGamma=ionicForceMatrix(g.R,atoms,vector3<>(),cp);
+			numerical=zeroes(6,6);
+			for(int a=0;a<6;a++) {
+				auto plus=atoms,minus=atoms; vector3<> d; d[a%3]=h;
+				plus[a/3].pos+=g.invR*d; minus[a/3].pos-=g.invR*d;
+				slab->energyAndGrad(plus); slab->energyAndGrad(minus);
+				for(int b=0;b<6;b++) numerical.set(b,a,(-(g.invRT*(plus[b/3].force-minus[b/3].force))/(2*h))[b%3]);
+			}
+			require(nrm2(slabGamma-numerical)/nrm2(numerical)<1e-7,"slab Gamma Hessian versus Ewald forces");
+			require(nrm2(slabGamma*translation)<1e-12,"slab ionic acoustic sum rule");
+			vector3<> planar=q; planar[dir]=0.;
+			matrix slabQ=ionicForceMatrix(g.R,atoms,planar,cp);
+			require(nrm2(slabQ-dagger(slabQ))<1e-12,"slab finite-q Hermiticity");
+			require(nrm2(slabQ-conj(ionicForceMatrix(g.R,atoms,-planar,cp)))<1e-12,"slab finite-q reality");
+			int axis=(dir+1)%3;
+			vector3<> boundary2; boundary2[axis]=0.5;
+			vector3<> scale(1,1,1); scale[axis]=2.;
+			GridInfo slabSup; slabSup.R=g.R*Diag(scale); slabSup.S=g.S; slabSup.S[axis]*=2; slabSup.initialize();
+			auto slabCoulombSup=cp.createCoulomb(slabSup);
+			extended.clear();
+			for(int cell=0;cell<2;cell++) for(const Atom& atom:atoms) {
+				vector3<> offset; offset[axis]=cell;
+				extended.emplace_back(atom.Z,slabSup.invR*g.R*(atom.pos+offset));
+			}
+			numerical=zeroes(6,6);
+			for(int a=0;a<6;a++) {
+				auto plus=extended,minus=extended;
+				for(int cell=0;cell<2;cell++) {
+					vector3<> d; d[a%3]=h*(cell ? -1.:1.);
+					plus[2*cell+a/3].pos+=slabSup.invR*d; minus[2*cell+a/3].pos-=slabSup.invR*d;
+				}
+				slabCoulombSup->energyAndGrad(plus); slabCoulombSup->energyAndGrad(minus);
+				for(int b=0;b<6;b++) numerical.set(b,a,(-(slabSup.invRT*(plus[b/3].force-minus[b/3].force))/(2*h))[b%3]);
+			}
+			matrix slabBoundary=ionicForceMatrix(g.R,atoms,boundary2,cp);
+			require(nrm2(slabBoundary-numerical)/nrm2(numerical)<1e-7,"slab finite-q Hessian versus replicated Ewald forces");
+			ScalarField density=ScalarFieldData::alloc(g);
+			for(int i=0;i<g.nr;i++) density->data()[i]=sin(0.31*i)+0.1;
+			complexScalarFieldTilde full=J(Complex(density));
+			for(auto mode:{Coulomb::PointChargeNone,Coulomb::PointChargeRight,Coulomb::PointChargeLeft})
+				require(nrm2(I(slab->applyBloch(full,vector3<>(),mode))-Complex(I((*slab)(J(density),mode))))<1e-10,
+					"slab Bloch Gamma kernel and point-charge range separation agree with ground-state Coulomb");
+		}
 		logPrintf("DFPT solver and Ewald checks passed.\n");
 	}
 	finalizeSystem();

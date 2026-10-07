@@ -10,6 +10,9 @@ class MPIUtil;
 // Cell-phase convention: u_s(R) = u_s(q) exp(2*pi*i*q.R).
 // Returns the unweighted ionic force matrix in Cartesian coordinates.
 matrix ionicForceMatrix(const matrix3<>& R, const std::vector<Atom>& atoms, const vector3<>& q);
+// As above with the ground-state Coulomb geometry (periodic or slab).
+matrix ionicForceMatrix(const matrix3<>& R, const std::vector<Atom>& atoms,
+	const vector3<>& q, const CoulombParams& params);
 // Rotate and permute Cartesian displacement components in the cell-phase gauge.
 // cellShift[s] is the integer cell containing the symmetry image of atom s.
 matrix transformDFPTForceMatrix(const matrix& F,const matrix3<>& rotation,const vector3<>& targetQ,

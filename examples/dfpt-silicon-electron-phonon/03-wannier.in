@@ -1,0 +1,11 @@
+# Valence bond Wannier functions and interpolatable electron-phonon matrices.
+include common.in
+symmetries none
+wannier phononSupercell 2 2 2
+wannier-initial-state phonon.$VAR
+wannier-dump-name wannier.$VAR
+wannier-center Gaussian 0.125 0.125 0.125
+wannier-center Gaussian 0.625 0.125 0.125
+wannier-center Gaussian 0.125 0.625 0.125
+wannier-center Gaussian 0.125 0.125 0.625
+wannier-minimize nIterations 300 energyDiffThreshold 1e-10

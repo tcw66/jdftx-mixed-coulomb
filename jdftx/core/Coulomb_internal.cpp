@@ -21,6 +21,18 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include <core/LoopMacros.h>
 #include <core/Thread.h>
 
+template<typename Calc>
+void coulombBloch_thread(size_t iStart, size_t iStop, vector3<int> S,
+	const matrix3<>& GGT, const Calc& calc, complex* data, const vector3<>& q)
+{ THREAD_fullGspaceLoop(data[i] *= calc(iG+q,GGT);) }
+void coulombBloch(vector3<int> S, const matrix3<>& GGT, const CoulombBloch_calc& calc,
+	complex* data, const vector3<>& q)
+{ threadLaunch(coulombBloch_thread<CoulombBloch_calc>, size_t(S[0])*S[1]*S[2], S, GGT, calc, data, q); }
+
+void coulombBlochIon(vector3<int> S, const matrix3<>& GGT, const CoulombBlochIon_calc& calc,
+	complex* data, const vector3<>& q)
+{ threadLaunch(coulombBloch_thread<CoulombBlochIon_calc>, size_t(S[0])*S[1]*S[2], S, GGT, calc, data, q); }
+
 template<typename Coulomb_calc>
 void coulombAnalytic_thread(size_t iStart, size_t iStop, vector3<int> S, const matrix3<>& GGT, const Coulomb_calc& calc, complex* data)
 {	THREAD_halfGspaceLoop

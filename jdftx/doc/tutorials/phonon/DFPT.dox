@@ -26,7 +26,25 @@ Atomic masses come from the species masses, as in the existing
 supercell phonon driver. Set a sufficiently converged electronic k mesh and
 plane-wave cutoff, and converge the phonon q mesh separately.
 
-The current scope is periodic, nonmagnetic systems with scalar,
+For a 2D material with vacuum along the third lattice direction, use
+`coulomb-interaction Slab 001` in both the SCF and DFPT inputs, and for example
+`phonon-dfpt 6 6 1`. The truncated lattice vector must be perpendicular to the
+periodic plane. Keep q-grid dimension 1 along that vector; all three Cartesian
+ionic displacements, including out-of-plane modes, are computed. The slab
+implementation uses the unregularized finite-q truncated Hartree kernel and
+an analytic 2D Ewald ionic Hessian. To enable embedding, add
+`coulomb-truncation-embed c0 c1 c2` in both inputs, with the center in the
+coordinate system selected by `coords-type`. For graphene centered at z=0,
+`coulomb-truncation-embed 0 0 0` is appropriate. Embedded Hartree response is
+expanded to the doubled slab grid; ionic derivatives use Gaussian range
+separation and act before embedding. The SCF and DFPT must also use the same
+embedding center, ion margin and FFT grid. External electric fields and fluid
+embedding are not supported.
+Keep sufficient vacuum for the charge distribution and the Coulomb ion margin.
+Electronic kpoint-folding must also be specified in the DFPT input and match
+the SCF checkpoint; `phonon-dfpt-initial-state` does not inherit it.
+
+The current scope is periodic or slab, nonmagnetic systems with scalar,
 fully occupied bands or finite-width Fermi/Gauss smearing, an analytic LDA/GGA XC kernel, and nonrelativistic
 norm-conserving pseudopotentials without nonlinear core corrections (for example,
 SG15). Ultrasoft potentials, nonlinear core corrections, spinors, exact
@@ -191,87 +209,74 @@ The utility reads the same lattice-space files as the supercell phonon workflow.
 
 \section DFPTElectronPhonon Electron-phonon matrix elements
 
-Add `phonon-dfpt-electron-phonon yes` to export the fully screened Cartesian
-Hamiltonian derivatives at every computed q and electronic k point. The operator
-includes the first ionic local and nonlocal pseudopotential derivatives and the
-induced Hartree and XC potential, evaluated after the response converges:
-`dH_a(m,n;k,q) = <psi_m,k+q | dH_SCF/du_a(q) | psi_n,k>`.
-No occupations, spin factor, k weights, atomic masses or zero-point amplitudes
-are included in these derivatives. Their units are Hartree/bohr. The metallic
-Gamma response includes the fixed-number occupation/Fermi-level response in
-screening; the exported Hamiltonian derivative is not shifted by minus d(mu).
+Add `phonon-dfpt-electron-phonon yes` to export the fully screened
+Hamiltonian derivatives in the same `phononHsub` format as the native
+supercell phonon executable. The operator includes the ionic local and nonlocal
+pseudopotential derivatives and the induced Hartree and XC potential. This
+output works with periodic or slab Coulomb, including slab truncation embedding.
+The metallic Gamma response includes fixed-number occupation/Fermi-level
+screening; the Hamiltonian derivative is not shifted by minus d(mu).
 
-All stored bands are exported. A fully occupied insulating input exports only
-valence-band matrix elements. To include conduction bands, run a new SCF with
-Fermi/Gauss smearing and additional `elec-n-bands`, and use exactly the same
-settings in the DFPT restart. Smearing can be small relative to the insulating
-gap; converge it along with the k mesh and empty-band count. The example in
-`examples/dfpt-silicon-electron-phonon` includes empty bands.
-
-This option overrides q and displacement symmetry reduction and computes all
-Cartesian responses explicitly. Transforming force constants alone does not
-transform the electronic Bloch phases needed for band matrix elements.
-Offset-state reuse, reduced-SCF unfolding and MPI q groups still work.
-Each q group writes its own distinct q files; only the common output head
-writes the final manifest and phonon interpolation files. Storage is
-`16*Nq*Nk*(3*Natoms)*Nbands^2` bytes plus metadata. Work and storage can therefore
-increase considerably compared with a phonon-only symmetry-reduced run.
+The electronic mesh must be Gamma centered and contain the phonon q grid:
+each `kpoint-folding` dimension must be divisible by the corresponding
+`phonon-dfpt` dimension. The output uses the Nq electronic k points commensurate
+with that phonon supercell, even when the electronic integration mesh is denser.
+Incompatible meshes are rejected before response calculations. Phonon-only DFPT
+continues to support q points off the electronic mesh.
 
 The output prefix has these additional files:
-- `phononEph`: text manifest, format version 1, Nq, Nk, Nbands, Nmodes, then the q grid.
-- `phononEphQ000000`, `phononEphQ000001`, etc.: binary little-endian complex128
-  derivatives in Cartesian mode, k, column-major band-matrix order. Matrix rows
-  are final bands at k+q, columns are initial bands at k. The mode order is the
-  same as `phononBasis`, but these derivatives use unit Cartesian displacements.
-- Each binary has a `.meta` file with version, Nk, Nbands, Nmodes, q, then for
-  each k a row of k[3], weight, target-index, (k+q)[3], followed by two rows of
-  source and target band energies in Hartree. target-index is zero based on the
-  ground electronic mesh; -1 means an off-mesh target. Weights include the
-  nonmagnetic spin degeneracy, as in JDFTx's electronic integration.
+- `phononHsub`: binary complex128 matrices, with outer loops over Cartesian
+  mode, target k, source k, then a column-major band matrix. Rows are final
+  bands and columns are initial bands. The target/source k difference selects
+  the phonon q. Each matrix is `dH_a(k_target,k_source)/(Nq*sqrt(M_a))`,
+  where the Cartesian derivative uses unit displacements in bohrs and M is
+  in electron masses. The 1/Nq factor is the supercell normalization of a
+  displacement localized in one cell. No phonon frequency or zero-point
+  normalization is included; this matches the native phonon output exactly.
+- `phononKpts`: the ordered commensurate electronic k subset, in centered
+  reciprocal coordinates, with the same ordering as the native phonon code.
+- `wfns`, `eigenvals`, `fillings`: the matching ground-state eigenvectors,
+  energies and occupations for the complete electronic mesh, written even
+  with `dump End None`. Use this DFPT prefix for Wannier input so the band
+  rotations and matrix elements refer to exactly the same electronic gauge.
 
-Source states are ground-state Hamiltonian eigenvectors. On-mesh targets are
-the same ground eigenvectors mapped into the wrapped k+q plane-wave basis,
-so one q group has a common electronic gauge. Off-mesh targets are separately
-diagonalized offset states. Independently initialized q groups can differ in
-electronic phases and rotations within degenerate subspaces. Individual complex
-matrix entries depend on that gauge; scattering probabilities and degenerate
-subspace sums should be compared accordingly.
-When selecting a band window for subspace sums or cross-run comparisons,
-include entire degenerate multiplets; a cutoff through a degenerate pair does
-not define a unique electronic subspace.
+The existing `phononBasis` supplies species, atom index, mass-weighted Cartesian
+displacement and atomic mass. All stored electronic bands are exported.
+A fully occupied insulating input supplies only valence-band elements. To
+include conduction bands, use Fermi/Gauss smearing and sufficient `elec-n-bands`
+in both SCF and DFPT. The example in `examples/dfpt-silicon-electron-phonon`
+includes empty bands and a Wannier input.
 
-Convert to phonon-mode matrix elements with:
+Export explicitly computes all q points and Cartesian displacements,
+overriding their symmetry reductions. Offset-state reuse and symmetry-reduced
+SCF unfolding remain available. MPI q groups synchronize their source
+Hamiltonian eigenvectors, including phases and degenerate-subspace rotations,
+and write disjoint target/source blocks of a single `phononHsub` file.
+Storage for this file is `16*(3*Natoms)*Nq^2*Nbands^2` bytes. The former
+`phononEphQ...` and metadata files are no longer produced.
+
+In a Wannier input with the same cell, ions, pseudopotentials, cutoff, bands,
+electronic mesh and `symmetries none`, set, for example:
 \code
-python3 /path/to/jdftx/scripts/electronPhononDFPT phonon. -o electron-phonon
+wannier phononSupercell 6 6 1
+wannier-initial-state phonon.$VAR
+wannier-dump-name wannier.$VAR
+# Add the wannier-center and band-window settings for your material.
 \endcode
-This writes one NumPy NPZ file per q with `g[k,mode,final_band,initial_band]`,
-band energies and signed phonon energies in meV by default. `--units eV` or
-`--units Hartree` changes these energy units. `--q-index 1` selects one computed
-q; repeat it to select several. `--bands 0 8` selects zero-based bands 0 through
-7 on both matrix axes. Each file also records q, k, k+q, integration weights,
-band indices, eigenvectors, squared frequencies, a valid-mode mask, and the
-Cartesian derivatives in Hartree/bohr.
+The supercell dimensions must equal those in `phonon-dfpt`. Run the existing
+`wannier` or `wannier_gpu` executable to obtain `mlwfHePh`, phonon cell maps
+and cell weights for interpolation. No file-format converter is needed.
+Wannier applies its usual translational-invariance correction and electronic
+rotation before the real-space transform. Construct phonon eigenvectors and
+apply the zero-point factor when evaluating mode-resolved couplings.
 
-With mass-weighted dynamical eigenvectors e(a,v), unit norm, the conversion is
-`g(m,n,v;k,q) = sum_a e(a,v;q)*dH_a(m,n;k,q)/sqrt(2*M_a*omega(q,v))`,
-where M is in electron masses and omega is in atomic units. The phonon
-eigenvector is not conjugated in this contraction. Imaginary, zero and tiny
-positive frequencies have no usable real zero-point normalization and their g
-entries are NaN; `valid_modes` identifies the retained modes.
-The positive cutoff defaults to 0.01 meV and is controlled by
-`--min-frequency-meV`. Raw Cartesian derivatives remain available for all modes.
-The phonon acoustic sum rule is applied to frequencies, without subtracting a
-uniform-displacement operator from the Cartesian electron-phonon derivatives.
-
-This converter evaluates the computed coarse q mesh. Arbitrary-q phonon
-frequencies can still be interpolated by `phononDFPT`, but Bloch matrix elements
-cannot be Fourier-interpolated without aligning the electronic gauges. This
-export is not the supercell `phononHsub` format consumed by the existing Wannier
-driver; integration with Wannier electron-phonon interpolation remains separate.
-Validation (`dfptElectronPhonon` and `dfptElectronPhononMPI`) compares screened
-diagonal band derivatives with independent SCF finite differences, checks q/-q
-Hermitian reciprocity, checks mass/frequency normalization, exercises off-mesh
-targets and compares MPI q-group coupling norms.
+Validation (`dfptElectronPhonon`, `dfptElectronPhononMPI` and
+`dfptElectronPhononEmbeddedSlab`) checks native file dimensions and k ordering,
+mass/supercell normalization, screened band derivatives against independent
+SCF finite differences, complex target/source reciprocity, and an actual
+Wannier export. The periodic test also compares all complex matrices with an
+independent native frozen-phonon calculation. MPI testing verifies complex
+reciprocity across q groups and compares the resulting Wannier couplings.
 
 Polar crystals require special care: the Gamma calculation uses zero macroscopic
 electric field. This implementation does not compute Born effective charges or

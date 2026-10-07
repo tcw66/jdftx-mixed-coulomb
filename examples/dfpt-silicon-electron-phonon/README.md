@@ -1,46 +1,37 @@
 # Silicon DFPT electron-phonon matrix elements
 
-Run from this directory with the rebuilt GPU executable:
+Run from this directory:
 
 ```bash
-../../build-gpu/jdftx_gpu -i 01-scf.in -o scf.out
-../../build-gpu/jdftx_gpu -i 02-dfpt.in -o dfpt.out
-python3 ../../jdftx/scripts/electronPhononDFPT phonon. -o electron-phonon
+../../build/jdftx -i 01-scf.in -o scf.out
+../../build/jdftx -i 02-dfpt.in -o dfpt.out
+../../build/wannier -i 03-wannier.in -o wannier.out
 ```
 
-Use `../../build/jdftx` for CPU runs. The example starts from a fresh
-symmetry-reduced SCF checkpoint with 12 bands, including conduction states.
-The existing four-band silicon checkpoints cannot supply these extra bands.
-DFPT unfolds the checkpoint and computes screened derivatives on the full
-4×4×4 electronic mesh and 2×2×2 q mesh, using the primitive-cell FFT grid.
-The cutoff, meshes, Fermi width and band count are starting values to converge.
+Use `../../build-gpu/jdftx_gpu` and `wannier_gpu` for GPU runs.
+The example creates a fresh symmetry-reduced SCF checkpoint with 12 bands,
+including conduction states. Existing four-band silicon checkpoints cannot
+supply these extra bands. DFPT unfolds the checkpoint and integrates the
+response on the full 4×4×4 electronic mesh with a 2×2×2 phonon q grid.
+Converge the cutoff, meshes, smearing width and band count for your calculation.
 
-Electron-phonon export computes all q points and Cartesian displacements
-explicitly. To parallelize over q, add `phonon-dfpt-q-groups 2` to `02-dfpt.in`
-and launch with two or more MPI ranks. Offset states are reused on commensurate
-meshes. Increase `elec-n-bands` in both inputs if the highest-band occupation
-check fails, then rerun SCF.
+`phonon-dfpt-electron-phonon yes` writes the native `phononHsub` format,
+`phononKpts`, `phononBasis`, and matching `wfns`, `eigenvals` and `fillings`.
+The matrix file contains all 12 bands on the eight electronic k points
+commensurate with the phonon grid, using the native mass and supercell factors.
+The Wannier example constructs four valence bond orbitals and outputs
+`wannier.mlwfHePh` for interpolation. Adjust trial orbitals and band windows
+to Wannierize conduction states or a different material.
 
-Read a result with NumPy:
+Export computes every q and Cartesian displacement explicitly. To distribute
+q work, add `phonon-dfpt-q-groups 2` and launch with at least two MPI ranks.
+All groups use a common band gauge. If the highest-band occupation check fails,
+increase `elec-n-bands` in both inputs and rerun SCF.
 
-```python
-import numpy as np
-data = np.load('electron-phonon/q000001.npz')
-g = data['g']  # complex matrix elements in meV: [k, phonon mode, final band, initial band]
-probability = abs(g)**2
-valid_modes = data['valid_modes']
-```
+Use the DFPT output prefix, `phonon.$VAR`, for `wannier-initial-state` so Wannier
+reads precisely the electronic states used to construct the matrix elements.
+Set `wannier phononSupercell` to the DFPT q-grid dimensions, and use the same
+full electronic mesh with `symmetries none`.
 
-Band energies, signed phonon energies, q, k, k+q, k weights, phonon eigenvectors
-and raw Cartesian derivatives are also stored. Zero/imaginary modes and positive
-frequencies below 0.01 meV have NaN couplings; use `valid_modes` when summing.
-Degenerate band/mode subspaces have basis-dependent individual matrix elements.
-Use `--q-index 1 --bands 0 8` to process selected q/bands, or `--units eV` for eV.
-
-These are coarse-mesh Bloch matrix elements. Phonon dispersions can be
-interpolated with `phononDFPT`; electron-phonon interpolation requires electronic
-gauge alignment and is not implemented by this converter. The output is
-distinct from the existing supercell/Wannier `phononHsub` format.
-
-See [the DFPT tutorial](../../jdftx/doc/tutorials/phonon/DFPT.dox) for
-normalization, file formats and supported systems.
+See [the DFPT tutorial](../../jdftx/doc/tutorials/phonon/DFPT.dox) for the file
+layout, normalization and supported systems.

@@ -279,10 +279,11 @@ struct CommandPhononDFPT : public Command
 		comments="Compute primitive-cell DFPT phonons on a Gamma-centered uniform q grid, then Fourier transform\n"
 			"to phononCellMap, phononOmegaSq and phononBasis for interpolation. Also writes phononForceMatrixQ.\n"
 			"Equivalent q points are reconstructed using space-group symmetry and time reversal by default.\n"
-			"Requires symmetries none, periodic Coulomb, nonmagnetic scalar states, analytic LDA/GGA,\n"
+			"Requires symmetries none, periodic or slab Coulomb (including embedding), nonmagnetic scalar states, analytic LDA/GGA,\n"
 			"and nonrelativistic norm-conserving pseudopotentials without nonlinear core corrections.\n"
 			"Use fully occupied bands for insulators; metals require Fermi or Gauss smearing at fixed electron number,\n"
 			"with enough empty bands that the highest-band occupation is below 1e-6 at k and k+/-q.\n"
+			"For slab Coulomb, set q-grid dimension 1 along the truncated direction.\n"
 			"Set perturb-minimize nIterations and residualTol explicitly. No offset wavefunction files are needed.";
 		forbid("perturb-ion"); forbid("perturb-Vexternal"); forbid("perturb-rhoExternal");
 		forbid("perturb-electric-field"); forbid("perturb-wavevector"); forbid("perturb-incommensurate-wavefunctions");
@@ -308,9 +309,10 @@ struct CommandPhononDFPTElectronPhonon : public Command
 	CommandPhononDFPTElectronPhonon() : Command("phonon-dfpt-electron-phonon", "jdftx/Perturb")
 	{
 		format="<yes|no>";
-		comments="Export screened Cartesian electron-phonon Hamiltonian derivatives (default no).\n"
-			"Writes phononEphQ000000 etc. and text .meta files, in Hartree/bohr, for all stored electronic bands.\n"
-			"Use scripts/electronPhononDFPT to obtain mode-resolved matrix elements in meV.\n"
+		comments="Export screened electron-phonon matrices in the native phonon / Wannier format (default no).\n"
+			"Writes phononHsub and phononKpts, plus matching wfns, eigenvals and fillings.\n"
+			"Requires a Gamma-centered electronic mesh with kpoint-folding divisible by the phonon q grid.\n"
+			"Use wannier phononSupercell with this q grid and wannier-initial-state with the DFPT dump prefix.\n"
 			"This export explicitly solves all q points and displacements, overriding their symmetry reductions.\n"
 			"Offset-state reuse, symmetry-reduced SCF restarts and MPI q groups remain available.\n"
 			"To include conduction bands, use Fermi/Gauss smearing and enough elec-n-bands in SCF and DFPT.";

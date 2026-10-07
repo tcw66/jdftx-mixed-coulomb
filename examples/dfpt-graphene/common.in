@@ -1,0 +1,9 @@
+include latMin.lattice
+include latMin.ionpos
+coulomb-interaction Slab 001
+coulomb-truncation-embed 0 0 0
+kpoint-folding 12 12 1
+elec-n-bands 10
+elec-smearing Fermi 0.01
+ion-species /home/tyler/apps/jdftx_defect_coulomb/build/pseudopotentials/SG15/$ID_ONCV_PBE.upf
+elec-cutoff 30

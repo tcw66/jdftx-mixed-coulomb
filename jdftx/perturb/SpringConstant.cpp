@@ -91,6 +91,14 @@ double SpringConstant::dsqEloc(std::shared_ptr<AtomPerturbation> modeA, std::sha
 	if (modeA->Vlocps && modeA->sameAtom(modeB)) {
 		ScalarFieldTilde nTilde = J(eVars.get_nTot());
 		ScalarFieldTilde dsqVlocps = D(D(modeA->Vlocps, modeA->mode.dirCartesian), modeB->mode.dirCartesian);
+		if(e.coulombParams.embed) {
+			ScalarFieldTilde V,rho,ball,core,tau;
+			nullToZero(V,e.gInfo); nullToZero(rho,e.gInfo);
+			const AtomicMode& a=modeA->mode; const AtomicMode& b=modeB->mode;
+			iInfo.species[a.sp]->updateLocal(V,rho,ball,core,tau,a.at);
+			dsqVlocps=D(D(V,a.dirCartesian),b.dirCartesian)
+				+(*e.coulomb)(D(D(rho,a.dirCartesian),b.dirCartesian),Coulomb::PointChargeRight);
+		}
 		dsqE += dot(nTilde, O(dsqVlocps));
 	}
 	watch.stop();
