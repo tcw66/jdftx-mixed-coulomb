@@ -21,6 +21,7 @@ in the relevant sections.
 - [KI and original PBE band comparison](#ki-and-original-pbe-band-comparison)
   - [KI input reference](#ki-input-reference)
 - [Mixed Coulomb features](#mixed-coulomb-features)
+  - [Mixed Coulomb input reference](#mixed-coulomb-input-reference)
   - [Clean reference](#clean-reference)
   - [Defect SCF](#defect-scf)
   - [Outputs and supported scope](#outputs-and-supported-scope)
@@ -28,9 +29,42 @@ in the relevant sections.
   - [One-shot potential construction for NSCF](#one-shot-potential-construction-for-nscf)
   - [Embedded mixed Coulomb truncation](#embedded-mixed-coulomb-truncation)
 - [Primitive-cell DFPT phonons](#primitive-cell-dfpt-phonons)
+  - [DFPT input reference](#dfpt-input-reference)
 - [Electron–phonon matrix elements](#electronphonon-matrix-elements)
 - [Tests](#tests)
 - [Upstream and license](#upstream-and-license)
+
+### Added command index
+
+| Command | Executable |
+|---|---|
+| [`defect-coulomb`](#defect-coulomb) | `jdftx` / `jdftx_gpu` |
+| [`defect-coulomb-center`](#defect-coulomb-center) | `jdftx` / `jdftx_gpu` |
+| [`phonon-dfpt`](#phonon-dfpt) | `jdftx` / `jdftx_gpu` |
+| [`phonon-dfpt-balance-q-groups`](#phonon-dfpt-balance-q-groups) | `jdftx` / `jdftx_gpu` |
+| [`phonon-dfpt-cache`](#phonon-dfpt-cache) | `jdftx` / `jdftx_gpu` |
+| [`phonon-dfpt-displacement-symmetries`](#phonon-dfpt-displacement-symmetries) | `jdftx` / `jdftx_gpu` |
+| [`phonon-dfpt-electron-phonon`](#phonon-dfpt-electron-phonon) | `jdftx` / `jdftx_gpu` |
+| [`phonon-dfpt-eph-cache-size`](#phonon-dfpt-eph-cache-size) | `jdftx` / `jdftx_gpu` |
+| [`phonon-dfpt-eph-reciprocity`](#phonon-dfpt-eph-reciprocity) | `jdftx` / `jdftx_gpu` |
+| [`phonon-dfpt-initial-state`](#phonon-dfpt-initial-state) | `jdftx` / `jdftx_gpu` |
+| [`phonon-dfpt-k-symmetries`](#phonon-dfpt-k-symmetries) | `jdftx` / `jdftx_gpu` |
+| [`phonon-dfpt-mixing`](#phonon-dfpt-mixing) | `jdftx` / `jdftx_gpu` |
+| [`phonon-dfpt-optimize`](#phonon-dfpt-optimize) | `jdftx` / `jdftx_gpu` |
+| [`phonon-dfpt-q-groups`](#phonon-dfpt-q-groups) | `jdftx` / `jdftx_gpu` |
+| [`phonon-dfpt-reuse-offset-states`](#phonon-dfpt-reuse-offset-states) | `jdftx` / `jdftx_gpu` |
+| [`phonon-dfpt-solver`](#phonon-dfpt-solver) | `jdftx` / `jdftx_gpu` |
+| [`phonon-dfpt-source-cache-size`](#phonon-dfpt-source-cache-size) | `jdftx` / `jdftx_gpu` |
+| [`phonon-dfpt-symmetries`](#phonon-dfpt-symmetries) | `jdftx` / `jdftx_gpu` |
+| [`wannier-koopmans`](#wannier-koopmans) | `wannier` / `wannier_gpu` |
+| [`wannier-koopmans-response`](#wannier-koopmans-response) | `wannier` / `wannier_gpu` |
+| [`wannier-koopmans-screening-mesh`](#wannier-koopmans-screening-mesh) | `wannier` / `wannier_gpu` |
+| [`wannier-koopmans-spin`](#wannier-koopmans-spin) | `wannier` / `wannier_gpu` |
+| [`wannier-koopmans-verbose`](#wannier-koopmans-verbose) | `wannier` / `wannier_gpu` |
+
+The references also cover the added `dump` variables and the existing
+`perturb-minimize` settings required by DFPT. These are native input commands;
+launching a program or choosing MPI ranks remains a separate shell operation.
 
 ## Build
 
@@ -80,6 +114,25 @@ cmake --build build-cpu --parallel 4 --target \
 
 Use that directory instead of `build` in the commands below. Provide
 pseudopotentials through JDFTx's normal search paths or `JDFTX_PSEUDO_DIR`.
+
+Executable targets and the CPU/GPU/unified presets automatically prepare the
+bundled SG15/GBRV library in `build/pseudopotentials`. Preparation is incremental;
+unchanged archives are not extracted again. Native inputs can therefore use:
+
+```text
+ion-species SG15/$ID_ONCV_PBE.upf
+```
+
+JDFTx replaces literal `$ID` with each ion's species name and resolves the
+unversioned SG15 alias to the latest bundled version, with a matching Pulay
+file when available. The compiled build-library search path works from any
+calculation directory without an environment override. Keep `$ID` literal in
+input files; quote or use a quoted here-document when generating them in a shell.
+`JDFTX_PSEUDO_DIR` supplies an additional library search directory, for example
+`/path/to/pseudopotentials` containing `SG15/`. It does not replace the native
+current-directory/build/install search paths. Installed builds include these
+libraries under `share/jdftx/pseudopotentials`.
+
 Python 3 is needed for utility wrappers and regression scripts; band and
 phonon plotting dependencies are listed with their workflows.
 
@@ -336,6 +389,57 @@ that generates the long-range part of `Vlocps`, independently of `ion-width`.
 For unembedded truncation, both source and correction potential are projected onto the real FFT grid
 with `I`/`J`; this removes unrepresentable point-ion Nyquist components and makes
 the energy, real-space potential, and ionic derivative consistent on that grid.
+
+### Mixed Coulomb input reference
+
+These commands run through `jdftx` or `jdftx_gpu`. Required arguments are
+shown in angle brackets; square brackets mark optional trailing arguments.
+Omitting both commands gives ordinary JDFTx electrostatics.
+
+#### `defect-coulomb`
+
+```text
+defect-coulomb <referenceFile> [<chargeTolerance>=1e-5]
+```
+
+Enable the variational mixed Coulomb correction during electronic SCF.
+
+| Argument | Default | Meaning and restrictions |
+|---|---|---|
+| `referenceFile` | Required | Native clean-reference file generated by `dump End DefectReference`. A raw electronic density file is insufficient. Cell, FFT grid, cutoffs, spin, smearing, host pseudopotentials and embedding metadata must be compatible with the current calculation. |
+| `chargeTolerance` | `1e-5` | Finite positive absolute tolerance, in electrons, on the integral of the defect-induced total charge. A non-neutral difference aborts; no compensating background is added. |
+
+Requires `coulomb-interaction Slab ...`, `electronic-scf`, `symmetries none`,
+a neutral fixed-electron-number vacuum calculation, and fixed ions/cell.
+Embedding is optional, with compatible reference settings. The correction
+includes both electronic and ionic charge differences. It changes the local
+SCF potential and total energy; it is not a postprocessing-only correction.
+The [supported scope](#outputs-and-supported-scope) lists incompatible modes.
+
+#### `defect-coulomb-center`
+
+```text
+defect-coulomb-center <c0> <c1> <c2>
+```
+
+All three coordinates are required and finite. They follow `coords-type`:
+Cartesian values are in bohr, and lattice values are fractional direct-lattice
+coordinates. Requires both `defect-coulomb` and `coulomb-truncation-embed`.
+Omitting this command inherits all three coordinates of the slab embedding
+center. An explicit center moves only the isolated defect operator; the slab
+operator keeps its own center. Choose the lateral center near the localized
+charge difference so it remains away from the truncation cuts.
+
+#### New `dump` variables
+
+| Input | Effect |
+|---|---|
+| `dump End DefectReference` | Export the clean spin-summed electronic density, bare ionic Coulomb source and compatibility metadata as `PREFIX.defectReference`, using `dump-name PREFIX.$VAR`. Generate it from the converged neutral clean slab. |
+| `dump End DefectCoulomb` | With the mixed correction active, export `PREFIX.deltaRho` and `PREFIX.Vcorr`; embedded calculations also export `PREFIX.deltaRhoEffective`. These are diagnostic grids, not replacement SCF checkpoints. |
+
+These are additional variables of the existing `dump` command. Neither is
+written unless requested. Their interpretation and embedded energy checks
+are explained in the workflow below.
 
 ### Clean reference
 
@@ -771,7 +875,8 @@ settings, a symmetry-reduced SCF restart and a 6×6×1 phonon/Wannier grid.
 
 ### Symmetry, response solvers and parallelism
 
-These optimizations are enabled by default for phonon-only calculations:
+These response optimizations are enabled by default for phonon calculations,
+including electron–phonon export:
 
 ```text
 phonon-dfpt-symmetries yes
@@ -869,6 +974,278 @@ depend on the mesh and hardware, and CPU/CUDA rows use different electronic
 meshes. [The validation script](jdftx/test/dfpt/checkFrozenCache.py) compares
 full-mesh, k-reduced, nested and combined calculations and records their timings.
 
+### DFPT input reference
+
+The following 16 commands are additions to the primitive-cell `jdftx`/
+`jdftx_gpu` input interface. `phonon-dfpt` enables the driver; all other
+`phonon-dfpt-*` commands require it. Arguments are positional. **Every argument
+shown for these DFPT commands is required when that command is present**,
+including explicit `yes`/`no` values. Defaults below apply when the optional
+command is omitted. Grid dimensions and iteration/history/group counts are
+integers. Cache limits are in MiB (1 MiB = 1,048,576 bytes).
+
+#### `phonon-dfpt`
+
+```text
+phonon-dfpt <Nq0> <Nq1> <Nq2>
+```
+
+All three dimensions are positive integers; their product must fit in a
+signed 32-bit integer. They define a Gamma-centered uniform phonon q mesh.
+Without this command, the phonon driver is disabled. For slab Coulomb the
+dimension along the truncated direction must be `1`; all three Cartesian
+displacement directions are still included. The phonon-only electronic k
+mesh need not contain the q mesh. Electron–phonon export has the additional
+commensurability requirement documented below.
+
+Requires `symmetries none`, nonmagnetic scalar states, periodic or slab
+Coulomb (including slab embedding), analytic LDA/GGA and nonrelativistic
+norm-conserving pseudopotentials without nonlinear core corrections. Set
+`perturb-minimize nIterations` to a positive value and choose its response
+tolerance explicitly. Insulators use fully occupied stored bands; metals
+use fixed-electron-number Fermi/Gauss smearing and enough empty bands.
+See [Metals and supported scope](#metals-and-supported-scope) for restrictions.
+
+Do not combine this driver with `perturb-ion`, `perturb-Vexternal`,
+`perturb-rhoExternal`, `perturb-electric-field`, `perturb-wavevector` or
+`perturb-incommensurate-wavefunctions`: the driver constructs its own
+perturbations and offset states. It writes the force/interpolation files in
+[Outputs and interpolation](#outputs-and-interpolation), using `dump-name`.
+
+#### `phonon-dfpt-initial-state`
+
+```text
+phonon-dfpt-initial-state <scf-input> <state-pattern>
+```
+
+| Argument | Default | Meaning and restrictions |
+|---|---|---|
+| `scf-input` | Required | Original SCF input describing the geometry, species, pseudopotentials, basis, electronic mesh and symmetries used to generate the checkpoint. |
+| `state-pattern` | Required | Saved-state filename pattern containing literal `$VAR`, such as `scf.$VAR`. Reads and unfolds saved wavefunctions and fillings onto the full DFPT mesh. |
+
+Use this command for a symmetry-reduced SCF restart; otherwise the driver
+initializes normally or reads a full-mesh checkpoint through `initial-state`.
+The target still uses `symmetries none`. Geometry, species, cutoff, bands,
+smearing, compatible weighted k mesh, Coulomb/embedding settings and FFT grid
+must match. Paths resolve from the calculation working directory. This
+command cannot coexist with `initial-state`, `wavefunction` or
+`elec-initial-fillings`. The ground state is polished before responses.
+
+#### `phonon-dfpt-symmetries`
+
+```text
+phonon-dfpt-symmetries <yes|no>
+```
+
+Default `yes`: reduce phonon q points with compatible space-group operations
+and time reversal, then reconstruct the full mesh. Compatibility checks cover
+the q grid, electronic mesh/weights, FFT sampling and frozen Hamiltonian.
+`no` computes all q points and also removes the symmetry operations used for
+displacement and response k reduction. The electronic input must still use
+`symmetries none`; these are driver-specific response symmetries.
+
+#### `phonon-dfpt-displacement-symmetries`
+
+```text
+phonon-dfpt-displacement-symmetries <yes|no>
+```
+
+Default `yes`: use the little group of each representative q to reduce atomic
+Cartesian displacement solves, including rotations, atom permutations,
+cell phases and time reversal. Reconstruct unsolved force-matrix columns and,
+when exporting couplings, screened potentials. `no` solves every Cartesian
+displacement at each representative q; q reduction remains independently
+controlled by `phonon-dfpt-symmetries`.
+
+#### `phonon-dfpt-k-symmetries`
+
+```text
+phonon-dfpt-k-symmetries <yes|no>
+```
+
+Default `no`. `yes` reduces electronic **response** k points using operations
+that preserve q exactly, have no translation, fix the displaced atom without
+a cell shift and map its direction to itself or its negative. Response
+symmetry averaging and band sewing reconstruct the full response before
+contractions. Unsupported operations retain the full response mesh.
+Ground-state and offset-state setup still use the full mesh, as do
+exported electron–phonon band contractions. Requires available driver
+symmetries; `phonon-dfpt-symmetries no` disables this reduction too.
+
+#### `phonon-dfpt-reuse-offset-states`
+
+```text
+phonon-dfpt-reuse-offset-states <yes|no>
+```
+
+Default `yes`: reuse ground-state wavefunctions at on-mesh k±q points,
+including reciprocal wrapping; check Hamiltonian residuals and refine when
+needed. Off-mesh states are solved in the frozen potential. `no` disables
+on-mesh reuse for a numerical/timing comparison. It does not change the
+chosen electronic or phonon mesh.
+
+#### `phonon-dfpt-q-groups`
+
+```text
+phonon-dfpt-q-groups <nGroups>
+```
+
+Default `1`. `nGroups` is a positive integer no larger than the launched MPI
+rank count. Groups solve different representative q points; each group's
+ranks distribute electronic k points. Unequal group sizes are supported.
+The launcher sets the rank count separately. Each group initializes and
+polishes its own ground state, increasing replicated memory/setup work.
+Use preferably no more groups than representative q points. All displacements
+at a q stay together, and final phonon files are written once.
+
+#### `phonon-dfpt-balance-q-groups`
+
+```text
+phonon-dfpt-balance-q-groups <yes|no>
+```
+
+Default `yes`: assign representative q points by estimated displacement work,
+off-mesh offset-state work, export-orbit size and group capacity. Larger
+groups can receive more work. `no` restores round-robin assignment. It has
+no distribution benefit for one q group and does not set the group count.
+
+#### `phonon-dfpt-solver`
+
+```text
+phonon-dfpt-solver <coupled|nested>
+```
+
+Default `coupled`: solve the coupled response using the algorithm selected
+by `perturb-minimize` (MINRES by default). `nested` fixes the response
+potential during inner Sternheimer solves and mixes the induced potential
+in outer iterations. Inner accuracy adapts to the coupled residual, reusing
+the prior response through a correction solve. Both paths check the same
+final coupled residual and fixed-electron-number Gamma constraint.
+Nested-mode speed depends on the material and mesh.
+
+#### `phonon-dfpt-mixing`
+
+```text
+phonon-dfpt-mixing <fraction> <history> <iterations>
+```
+
+| Argument | Default | Meaning and restrictions |
+|---|---:|---|
+| `fraction` | `0.4` | Finite outer potential mixing fraction in **(0, 1]**. Smaller fractions take a smaller potential update. |
+| `history` | `8` | Positive integer number of previous outer mixing entries retained for the regularized DIIS history. |
+| `iterations` | `80` | Positive maximum outer iteration count. Separate from the inner `perturb-minimize nIterations` cap. |
+
+Only active with `phonon-dfpt-solver nested`. Supply all three arguments
+when writing this command, even to change only the last one.
+
+#### `phonon-dfpt-cache`
+
+```text
+phonon-dfpt-cache <yes|no>
+```
+
+Default `yes`: reuse frozen XC data and bare displacement potentials within
+one representative q; also retain source vectors within the source-cache
+budget. `no` recomputes them for reference comparisons. These caches are
+released after each q and do not alter the response equations or tolerance.
+This setting is separate from the electron–phonon export cache below.
+
+#### `phonon-dfpt-source-cache-size`
+
+```text
+phonon-dfpt-source-cache-size <MiB>
+```
+
+Default `128`. Supply a finite nonnegative additional source-vector storage
+budget **per MPI rank**. `0` disables retained source vectors while preserving
+the potential/XC caches when `phonon-dfpt-cache yes`. `phonon-dfpt-cache no`
+disables source caching regardless of this budget. Source cache entries
+are released after each representative q; this is not a total memory limit.
+
+#### `phonon-dfpt-optimize`
+
+```text
+phonon-dfpt-optimize <yes|no>
+```
+
+Default `yes`: use direct complex response operators and fused
+bare-plus-induced electron–phonon contractions. It also enables bounded
+export-wavefunction caching and the conditional reciprocity shortcut.
+`no` selects reference operator/contraction paths, including separate
+bare/induced export contractions. Symmetry, the response cache, solver
+selection and MPI groups have their own controls; this flag does not
+switch them all off or enable electron–phonon export by itself.
+
+#### `phonon-dfpt-electron-phonon`
+
+```text
+phonon-dfpt-electron-phonon <yes|no>
+```
+
+Default `no`. `yes` exports screened `phononHsub` matrices and `phononKpts`,
+plus matching full-electronic-mesh wavefunctions, eigenvalues and fillings,
+even with `dump End None`. The electronic mesh must be Gamma centered and
+each `kpoint-folding` dimension divisible by the phonon q-grid dimension.
+All stored bands enter the exported matrices. To include conduction bands,
+use matching Fermi/Gauss smearing and enough bands in SCF and DFPT.
+
+Q/displacement symmetries reconstruct screened potentials; optional response
+k reduction remains available. Matrix contractions use full saved electronic
+states. Offset reuse, symmetry-reduced SCF restarts and q groups are supported.
+File ordering, mass factors and normalization are documented in
+[Electron–phonon matrix elements](#electronphonon-matrix-elements).
+
+#### `phonon-dfpt-eph-cache-size`
+
+```text
+phonon-dfpt-eph-cache-size <MiB>
+```
+
+Default `512`. Supply a finite nonnegative budget **per MPI rank** for
+real-space electronic wavefunctions retained during optimized coupling
+export. The byte budget must fit in the address space. `0` disables this
+cache; it is also inactive with `phonon-dfpt-optimize no` or export disabled.
+Storage is released before the next response solve. This is independent of
+`phonon-dfpt-source-cache-size` and does not cap all export/solver memory.
+
+#### `phonon-dfpt-eph-reciprocity`
+
+```text
+phonon-dfpt-eph-reciprocity <yes|no>
+```
+
+Default `yes`: during optimized export, contract one Hermitian k pair and
+write its conjugate-transpose partner when q and −q belong to the same
+symmetry orbit. Otherwise the code falls back to full contractions.
+`no` explicitly contracts both partners for reference comparisons.
+Requires export and `phonon-dfpt-optimize yes` to have an effect.
+
+#### Response convergence: `perturb-minimize`
+
+This existing command supplies essential convergence settings for the new
+DFPT driver. Its named key/value pairs may appear in any order:
+
+```text
+perturb-minimize nIterations 500 algorithm MINRES residualTol 1e-7 residualDiffThreshold 0
+```
+
+| Key | Native default | Meaning |
+|---|---|---|
+| `nIterations` | `0` | Nonnegative maximum solve iterations; **must be positive for DFPT**. In nested mode, caps the inner solves. |
+| `algorithm` | `MINRES` | `MINRES` or `CG` for the coupled linear solver. Nested inner band CG can fall back to MINRES. |
+| `residualTol` | `1e-4` | Positive relative residual tolerance; the example requests `1e-7`. |
+| `residualDiffThreshold` | `1e-4` | Nonnegative successive-residual stopping threshold for MINRES. Set `0` for response calculations that should converge by residual magnitude rather than stagnation. |
+| `CGBypass` | `no` | Bypass CG's stop after three consecutive residual increases. Applies to CG. |
+| `recomputeResidual` | `no` | Recompute the residual every ten CG iterations. Applies to CG. |
+
+KI sets its solver caps/tolerance through `wannier-koopmans` instead.
+For generic finite-q perturbations outside `phonon-dfpt`, the existing
+`perturb-incommensurate-wavefunctions <filename> [<EcutOld>]` is now optional:
+offset states are generated automatically when the command is absent.
+`filename` supplies native k+q/k−q occupied wavefunctions; positive `EcutOld`
+(in Hartree) enables old-cutoff conversion, while omission/`0` disables it.
+The phonon driver forbids this manual-offset command.
+
 ### Metals and supported scope
 
 Insulating inputs can use fully occupied bands without smearing. Metals and
@@ -958,12 +1335,15 @@ integrates over the full 144-point electronic mesh.
 
 All stored electronic bands are included. To include conduction states, prepare
 a fresh SCF checkpoint with Fermi/Gauss smearing and additional bands, keeping
-those settings identical in DFPT. Electron–phonon export explicitly solves every
-q and Cartesian displacement on the full electronic response mesh, overriding
-q, displacement and response k-point symmetry reductions. Offset reuse,
-symmetry-reduced SCF unfolding and MPI q groups remain available. Q groups
-synchronize electronic phases and degenerate-band rotations, then write disjoint
-blocks of one matrix file.
+those settings identical in DFPT. Electron–phonon export uses q and displacement
+symmetry reduction to reconstruct the full set of screened potentials. Optional
+response k-point reduction also remains available; band contractions use the
+full saved electronic states. Offset reuse, symmetry-reduced SCF unfolding and
+MPI q groups remain available. Q groups synchronize electronic phases and
+degenerate-band rotations, then write disjoint blocks of one matrix file.
+Optimized export can cache real-space wavefunctions and use Hermitian-pair
+reciprocity where compatible; see the [DFPT input reference](#dfpt-input-reference)
+for the separate optimization, cache and reciprocity controls.
 
 With `dump-name phonon.$VAR`, the additional output is:
 
