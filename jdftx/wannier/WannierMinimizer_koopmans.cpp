@@ -81,6 +81,7 @@ class ScreeningReuse
 	const Everything& e;
 	bool enabled;
 	bool verbose;
+	bool diagnostics;
 	double tolerance;
 	std::vector<std::unique_ptr<Operation>> operations;
 	std::vector<Entry> entries;
@@ -143,8 +144,12 @@ class ScreeningReuse
 	}
 public:
 	ScreeningReuse(const Everything& e, const std::vector<vector3<>>& qmesh, bool enabled, double tolerance, bool quiet=false,double cacheMiB=256.,bool verbose=false)
-		: e(e), enabled(enabled), verbose(verbose), tolerance(tolerance), byQ(qmesh.size()),cacheLimit(cacheMiB*1024.*1024.)
+		: e(e), enabled(enabled), verbose(verbose), diagnostics(false), tolerance(tolerance), byQ(qmesh.size()),cacheLimit(cacheMiB*1024.*1024.)
 	{
+		if(const char* setting=getenv("JDFTX_KI_SYMMETRY_DIAGNOSTICS")) {
+			if(string(setting)!="0" && string(setting)!="1") die("JDFTX_KI_SYMMETRY_DIAGNOSTICS must be 0 or 1.\n");
+			diagnostics=string(setting)=="1";
+		}
 		if(enabled && mpiWorld->isHead())
 		{
 			// Put pure time reversal first: it remains valid for complex MLWFs
@@ -227,7 +232,7 @@ public:
 	{
 		entries.clear(); for(auto& indices:byQ) indices.clear(); cacheBytes=0;
 	}
-	bool lookup(const complexScalarField& rho, double occupation, int iq, double bare, double& response)
+	bool lookup(const complexScalarField& rho, double occupation, int iq, double bare, double& response, int orbital)
 	{
 		if(!enabled) return false;
 		int match=-1;
@@ -235,6 +240,8 @@ public:
 		if(mpiWorld->isHead())
 		{
 			double norm=nrm2(rho);
+			double closestError=INFINITY,closestNormError=INFINITY,closestCurvatureError=INFINITY;
+			int closestOrbital=-1,closestQ=-1;
 			for(const auto& op: operations)
 			{
 				const auto& mapped=op->qMap[iq];
@@ -242,8 +249,9 @@ public:
 				for(int index:byQ[mapped.index])
 				{
 					const auto& entry=entries[index];
-					if(occupation!=entry.occupation || norm<1e-15 || entry.norm<1e-15
-						|| fabs(norm-entry.norm)>tolerance*std::max(norm,entry.norm)) continue;
+					if(occupation!=entry.occupation || norm<1e-15 || entry.norm<1e-15) continue;
+					double normError=fabs(norm-entry.norm)/std::max(norm,entry.norm);
+					if(normError>tolerance && !diagnostics) continue;
 					if(!transformed)
 					{
 						nullToZero(transformed,e.gInfo); initZero(transformed);
@@ -256,7 +264,12 @@ public:
 					complexScalarField difference=clone(transformed);
 					callPref(eblas_zaxpy)(e.gInfo.nr,-overlap/magnitude,entry.rho->dataPref(),1,difference->dataPref(),1);
 					error=nrm2(difference)/std::max(norm,entry.norm);
-					if(error<=tolerance) {
+					if(diagnostics && error<closestError) {
+						closestError=error; closestNormError=normError;
+						closestOrbital=entry.orbital; closestQ=entry.iq;
+						closestCurvatureError=fabs(bare-entry.bare)/std::max(1e-30,std::max(fabs(bare),fabs(entry.bare)));
+					}
+					if(error<=tolerance && normError<=tolerance) {
 						double curvatureError=fabs(bare-entry.bare)/std::max(1e-30,std::max(fabs(bare),fabs(entry.bare)));
 						if(curvatureError>tolerance) {
 							if(curvatureRejected<8) logPrintf("KI symmetry curvature rejection: q %d vs %d, source error %.3g, curvature error %.3g (%.12g vs %.12g).\n",
@@ -268,6 +281,9 @@ public:
 				}
 				if(match>=0) break;
 			}
+			if(diagnostics && match<0 && closestOrbital>=0)
+				logPrintf("KI symmetry mismatch: orbital %d, q %d; nearest orbital %d, q %d; source %.9g, norm %.9g, curvature %.9g; tolerance %.9g.\n",
+					orbital+1,iq+1,closestOrbital+1,closestQ+1,closestError,closestNormError,closestCurvatureError,tolerance);
 		}
 		// The head decides once so GPU roundoff cannot change collective ordering.
 		mpiWorld->bcast(match);
@@ -296,7 +312,7 @@ public:
 		cacheBytes+=bytes;
 		peakCacheBytes=std::max(peakCacheBytes,cacheBytes);
 	}
-	void report(const MPIUtil* reduction=nullptr, bool contribute=true) const
+	void report(const MPIUtil* reduction=nullptr, bool contribute=true, bool audit=false) const
 	{
 		int counts[2]={contribute ? solved : 0, contribute ? reused : 0};
 		double error=contribute ? maxError : 0., bytes=contribute ? double(peakCacheBytes) : 0.;
@@ -310,8 +326,8 @@ public:
 			reduction->allReduce(rejected,MPIUtil::ReduceSum);
 			reduction->allReduce(curvatureError,MPIUtil::ReduceMax);
 		}
-		logPrintf("KI response solves: %d/%d; reused %d symmetry-equivalent pairs; maximum density error %.3g; cache %.1f MiB.\n",
-			counts[0],counts[0]+counts[1],counts[1],error,bytes/(1024.*1024.));
+		logPrintf("KI %s: %d/%d; reused %d symmetry-equivalent pairs; maximum density error %.3g; cache %.1f MiB.\n",
+			audit ? "symmetry audit pairs" : "response solves",counts[0],counts[0]+counts[1],counts[1],error,bytes/(1024.*1024.));
 		logPrintf("KI symmetry curvature checks: %d rejected density-equivalent candidates; maximum relative curvature error %.3g.\n",rejected,curvatureError);
 	}
 };
@@ -669,13 +685,6 @@ void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 		qOwner=planner.qOwners(nQGroups,qOrder,qStar,coarseScreening ? screeningQ : std::vector<bool>());
 		if(!wannier.koopmansOptimizeResponse) std::iota(qOrder.begin(),qOrder.end(),0);
 	}
-	// Number only stars on the selected screening mesh, including when the
-	// bare Hamiltonian is integrated on a finer mesh. Each orbital source is
-	// still checked independently before a symmetry-equivalent response is reused.
-	std::vector<int> screeningStar(*std::max_element(qStar.begin(),qStar.end())+1,-1);
-	int nScreeningStars=0;
-	for(int iq:qOrder) if(screeningQ[iq] && screeningStar[qStar[iq]]<0)
-		screeningStar[qStar[iq]]=nScreeningStars++;
 	logPrintf("KI q parallelism: %d response groups requested, %d active, %d MPI ranks total.\n",
 		wannier.koopmansQGroups,nQGroups,mpiWorld->nProcesses());
 	for(int group=0;group<nQGroups;group++)
@@ -775,16 +784,17 @@ void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 		wannier.koopmansOptimizeResponse ? "enabled" : "disabled");
 	logPrintf("KI screening solver: %s%s.\n",p.nestedResponse ? "nested" : "coupled MINRES",
 		p.nestedResponse ? (p.independentBandCG ? " with independent-band CG / MINRES fallback" : " with MINRES inner solves") : "");
+	int computedQCount=0,lastComputedQ=-1;
 	auto printScreeningProgress=[&](int iq,int orbital,const char* activity) {
-		logPrintf("KI group %d/%d: %s %d/%d, mesh q %d/%d [%.8g %.8g %.8g], orbital %d/%d: %s.\n",
-			responseGroups.index+1,nQGroups,wannier.koopmansReduceSymmetry ? "q star" : "screening q",
-			screeningStar[qStar[iq]]+1,nScreeningStars,iq+1,nk,qmesh[iq][0],qmesh[iq][1],qmesh[iq][2],orbital+1,nCenters,activity);
+		logPrintf("KI group %d/%d: %s q %d, mesh q %d/%d [%.8g %.8g %.8g], orbital %d/%d: %s.\n",
+			responseGroups.index+1,nQGroups,symmetryAudit ? "audit" : "computed",
+			computedQCount,iq+1,nk,qmesh[iq][0],qmesh[iq][1],qmesh[iq][2],orbital+1,nCenters,activity);
 		logFlush(); // Announce the active pair before its potentially long solve.
 	};
 	// Bare conduction corrections depend only on frozen orbital sources. Form
 	// one orbital's owned-q potentials, convolve them across the mesh, and
 	// release those fields before moving to the next orbital.
-	if(fftCorrelation) for(int n:emptyCenters) {
+	if(fftCorrelation && !symmetryAudit) for(int n:emptyCenters) {
 		std::vector<complexScalarField> potentials(nk);
 		for(int iq=0;iq<nk;iq++) if(qOwner[iq]==responseGroups.index) {
 			complexScalarField rho=correlation->source(n,iq);
@@ -803,6 +813,7 @@ void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 	for(int iq:qOrder)
 	{
 		if(qOwner[iq]!=responseGroups.index) continue;
+		if(symmetryAudit && !screeningQ[iq]) continue;
 		if(wannier.koopmansOptimizeResponse && wannier.koopmansReduceSymmetry && qStar[iq]!=lastStar) {
 			reuse.clearStar(); lastStar=qStar[iq];
 		}
@@ -919,8 +930,12 @@ void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 			complexScalarField v=(1./e.gInfo.dV)*potential[0];
 			if(p.kiSpinResponse) v+=(1./e.gInfo.dV)*potential[1];
 			double response=0.;
-			if(screeningQ[iq] && !reuse.lookup(rho,occupations[n],iq,bareTerm,response))
+			if(screeningQ[iq] && !reuse.lookup(rho,occupations[n],iq,bareTerm,response,n))
 			{
+				// Count a q only when an orbital actually needs an independent
+				// response. Reused q points do not advance this group-local index;
+				// other orbitals and spin sectors at the same q keep its index.
+				if(iq!=lastComputedQ) { lastComputedQ=iq; computedQCount++; }
 				if(symmetryAudit) printScreeningProgress(iq,n,"independent pair (audit)");
 				if(!symmetryAudit) prepareQ();
 				for(size_t channel=0;channel<potential.size();channel++) {
@@ -952,7 +967,7 @@ void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 			}
 			// SI Eq. 6: <V_(n,q)|conj(u_(i,k)) u_(n,k+q)> / Nq.
 			// Occupied columns have only the constant -Delta_n/2 contribution.
-			if(!occupations[n] && !fftCorrelation) for(int ik=0; ik<nk; ik++)
+			if(!symmetryAudit && !occupations[n] && !fftCorrelation) for(int ik=0; ik<nk; ik++)
 			{
 				complexScalarField shifted=clone(orbital[plus[ik].index][n]);
 				multiplyBlochPhase(shifted,-plus[ik].wrap);
@@ -979,6 +994,9 @@ void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 		p.dVext.reset();
 	}
 
+	logPrintf("KI group %d/%d: %s q points total: %d.\n",
+		responseGroups.index+1,nQGroups,symmetryAudit ? "audit" : "computed",computedQCount);
+	logFlush();
 	const bool groupHead=mpiWorld->isHead();
 	solver.clearBandCoarseSpace();
 	coarseSource.clear();
@@ -1014,7 +1032,7 @@ void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 		for(int ik=0;ik<nk;ik++)
 			callPref(eblas_copy)(correction[ik].dataPref(),packed.dataPref()+packed.index(0,ik),correction[ik].nData());
 	}
-	reuse.report(nQGroups>1 ? mpiWorld : nullptr,nQGroups>1 ? groupHead : true);
+	reuse.report(nQGroups>1 ? mpiWorld : nullptr,nQGroups>1 ? groupHead : true,symmetryAudit);
 	if(symmetryAudit) {
 		logPrintf("KI symmetry audit complete: no response solves or KI spectral outputs were produced.\n");
 		return;
