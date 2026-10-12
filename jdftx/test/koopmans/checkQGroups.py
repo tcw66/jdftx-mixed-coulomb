@@ -32,6 +32,25 @@ def run(folder, executable, text, ranks=1, success=True,
     log = (folder/'output.out').read_text()
     if success:
         assert result.returncode == 0 and 'Done!' in log and 'Stack trace:' not in log, log[-3000:]+result.stderr
+        if 'KI response solves:' in log:
+            nq, groups, pairs, sectors = map(int, re.search(
+                r'KI response workload: (\d+) independent q points across (\d+) groups; '
+                r'(\d+) independent orbital-q pairs, (\d+) sector solves', log).groups())
+            assert pairs == solves(log)[0] and sectors == 2*pairs
+            prefix = re.search(r'wannier-dump-name (.*)\.\$VAR', text)[1]
+            logs = [log]+[Path(prefix+f'.koopmansQGroup{i}.out').read_text() for i in range(1, groups)]
+            assigned = 0
+            for group_log in logs:
+                group, count = map(int, re.search(
+                    r'KI group (\d+)/\d+: (\d+) independent q points assigned', group_log).groups())
+                assigned += count
+                seen = set()
+                for index, total, iq in re.findall(
+                        r'KI group \d+/\d+: computed q (\d+)/(\d+), mesh q (\d+)/', group_log):
+                    seen.add(int(iq))
+                    assert int(index) == len(seen) and int(total) == count
+                assert len(seen) == count
+            assert assigned == nq
     else:
         assert result.returncode != 0 and expected_error in log+result.stderr, log[-2000:]+result.stderr
     return log

@@ -42,6 +42,18 @@ def main():
             assert result.returncode and error in log+result.stderr, log[-4000:]+result.stderr
         else:
             assert not result.returncode and log.rstrip().endswith('Done!'), log[-4000:]+result.stderr
+            progress = re.findall(r'KI group (\d+)/(\d+): computed q (\d+)/(\d+), mesh q (\d+)/(\d+)', log)
+            computed = {}
+            for group, groups, counter, total, iq, mesh_size in progress:
+                seen = computed.setdefault(int(group), {})
+                if int(iq) not in seen:
+                    seen[int(iq)] = len(seen)+1
+                assert int(counter) == seen[int(iq)], (counter, iq, seen)
+                assert 1 <= int(counter) <= int(total)
+                assert re.search(rf'KI group {group}/{groups}: {total} independent q points assigned\.', log)
+            for group, seen in computed.items():
+                assert re.search(rf'KI group {group}/\d+: {len(seen)} independent q points assigned\.', log)
+                assert re.search(rf'KI group {group}/\d+: computed q points total: {len(seen)}\.', log)
         return log
 
     def read(prefix):

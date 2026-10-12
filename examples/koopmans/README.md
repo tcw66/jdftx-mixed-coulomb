@@ -5,11 +5,24 @@ The inputs use a spin-unpolarized PBE ground state (`spintype no-spin`), an
 as one electron and includes charge and magnetic response about that
 nonmagnetic ground state (`wannier-koopmans-spin yes`).
 
-KI output is concise by default: each independent response reports its q
-group, symmetry q-star number, actual q-point index/vector, orbital and
-charge/magnetic sector before the solve starts. q vectors use fractional
-reciprocal-lattice coordinates; star numbers count the selected screening
-mesh's symmetry classes. Equivalent pairs that reuse a result stay quiet.
+KI output is concise by default. A source-only symmetry planning pass first
+reports the global number of independent q points, orbital–q pairs and
+charge/magnetic sector solves. It uses the actual Wannier functions, screening
+mesh, tolerance and cache budget. The current 8×8×8 conduction setup at tolerance
+`1e-4` needs **65 independent q points**, 300 orbital–q pairs and 600 sector
+solves; this count can change with the orbitals and settings.
+
+Each independent response reports its q group, `computed q i/N` counter,
+actual mesh index/vector, orbital and charge/magnetic sector before the solve
+starts. The denominator is the group's assigned independent-q total, and the
+counter advances only when a new q needs an independent response. Other
+orbitals and spin sectors at the same q retain its counter. After each completed
+charge or magnetic response, a matching line prints its wall-clock solve
+duration in seconds, for example `charge response completed in 123.45 s.`.
+These messages remain visible with `verbose no`, in the main or corresponding
+q-group log. q vectors use fractional reciprocal-lattice coordinates.
+Equivalent pairs that reuse a result stay quiet, and source-only audits do not
+print solve timings. Each group's final computed-q count is also printed.
 Final residuals, screening summaries and warnings/errors are retained.
 To restore k-point and
 basis listings, symmetry-reuse messages and every response iteration, set

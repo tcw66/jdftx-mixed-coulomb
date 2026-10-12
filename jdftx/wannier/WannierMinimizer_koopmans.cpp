@@ -82,6 +82,7 @@ class ScreeningReuse
 	bool enabled;
 	bool verbose;
 	bool diagnostics;
+	bool quiet;
 	double tolerance;
 	std::vector<std::unique_ptr<Operation>> operations;
 	std::vector<Entry> entries;
@@ -144,11 +145,11 @@ class ScreeningReuse
 	}
 public:
 	ScreeningReuse(const Everything& e, const std::vector<vector3<>>& qmesh, bool enabled, double tolerance, bool quiet=false,double cacheMiB=256.,bool verbose=false)
-		: e(e), enabled(enabled), verbose(verbose), diagnostics(false), tolerance(tolerance), byQ(qmesh.size()),cacheLimit(cacheMiB*1024.*1024.)
+		: e(e), enabled(enabled), verbose(verbose), diagnostics(false), quiet(quiet), tolerance(tolerance), byQ(qmesh.size()),cacheLimit(cacheMiB*1024.*1024.)
 	{
 		if(const char* setting=getenv("JDFTX_KI_SYMMETRY_DIAGNOSTICS")) {
 			if(string(setting)!="0" && string(setting)!="1") die("JDFTX_KI_SYMMETRY_DIAGNOSTICS must be 0 or 1.\n");
-			diagnostics=string(setting)=="1";
+			diagnostics=!quiet && string(setting)=="1";
 		}
 		if(enabled && mpiWorld->isHead())
 		{
@@ -272,7 +273,7 @@ public:
 					if(error<=tolerance && normError<=tolerance) {
 						double curvatureError=fabs(bare-entry.bare)/std::max(1e-30,std::max(fabs(bare),fabs(entry.bare)));
 						if(curvatureError>tolerance) {
-							if(curvatureRejected<8) logPrintf("KI symmetry curvature rejection: q %d vs %d, source error %.3g, curvature error %.3g (%.12g vs %.12g).\n",
+							if(!quiet && curvatureRejected<8) logPrintf("KI symmetry curvature rejection: q %d vs %d, source error %.3g, curvature error %.3g (%.12g vs %.12g).\n",
 								iq+1,entry.iq+1,error,curvatureError,bare,entry.bare);
 							curvatureRejected++; maxCurvatureError=std::max(maxCurvatureError,curvatureError); continue;
 						}
@@ -691,6 +692,7 @@ void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 		logPrintf("KI q assignment: group %d owns %d/%d q points.\n",group+1,int(std::count(qOwner.begin(),qOwner.end(),group)),nk);
 	projectorCache.clear();
 	FullMeshState fullState(system);
+	MPIUtil* responseWorld=mpiWorld;
 	QResponseGroups responseGroups(system,wannier,iSpin,nQGroups);
 	p.solverParams.fpLog=globalLog;
 	ElecInfo& info=system.eInfo;
@@ -784,12 +786,64 @@ void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 		wannier.koopmansOptimizeResponse ? "enabled" : "disabled");
 	logPrintf("KI screening solver: %s%s.\n",p.nestedResponse ? "nested" : "coupled MINRES",
 		p.nestedResponse ? (p.independentBandCG ? " with independent-band CG / MINRES fallback" : " with MINRES inner solves") : "");
+	// Share source construction with the planning pass so its reuse decisions
+	// use exactly the same density, curvature, ordering and cache budget.
+	auto orbitalSource=[&](int n,int iq,const std::vector<MeshPoint>& plus) {
+		if(fftCorrelation) return correlation->source(n,iq);
+		complexScalarField rho;
+		nullToZero(rho,e.gInfo); initZero(rho);
+		for(int ik=0;ik<nk;ik++) {
+			complexScalarField shifted=clone(orbital[plus[ik].index][n]);
+			multiplyBlochPhase(shifted,-plus[ik].wrap);
+			rho+=(1./nk)*conj(orbital[ik][n])*shifted;
+		}
+		return rho;
+	};
+	int plannedQCount=0,plannedPairCount=0;
+	logPrintf("KI planning independent q points (orbital-source symmetry checks only).\n"); logFlush();
+	if(wannier.koopmansReduceSymmetry) {
+		if(!wannier.koopmansOptimizeResponse) solver.updateExcorrCache();
+		ScreeningReuse plan(e,qmesh,true,wannier.koopmansSymmetryTolerance,true,
+			wannier.koopmansOptimizeResponse ? wannier.koopmansSymmetryCacheMiB : 256.);
+		int lastPlannedStar=-1;
+		for(int iq:qOrder) {
+			if(qOwner[iq]!=responseGroups.index || !screeningQ[iq]) continue;
+			if(wannier.koopmansOptimizeResponse && qStar[iq]!=lastPlannedStar) {
+				plan.clearStar(); lastPlannedStar=qStar[iq];
+			}
+			p.qvec=qmesh[iq];
+			std::vector<MeshPoint> plus(nk);
+			if(!fftCorrelation) for(int ik=0;ik<nk;ik++) plus[ik]=meshPoint(mesh,mesh[ik]+qmesh[iq]);
+			bool independent=false;
+			for(int n=0;n<nCenters;n++) {
+				auto rho=orbitalSource(n,iq,plus);
+				auto potential=orbitalPotentials(rho,qmesh[iq]);
+				double bareTerm=0.,response=0.;
+				for(const auto& vChannel:potential) bareTerm+=dot(rho,vChannel).real()/nk;
+				if(!plan.lookup(rho,occupations[n],iq,bareTerm,response,n)) {
+					independent=true; plannedPairCount++;
+					plan.record(rho,n,occupations[n],iq,bareTerm,0.);
+				}
+			}
+			if(independent) plannedQCount++;
+		}
+	} else {
+		for(int iq:qOrder) if(qOwner[iq]==responseGroups.index && screeningQ[iq]) plannedQCount++;
+		plannedPairCount=plannedQCount*nCenters;
+	}
+	int workload[2]={mpiWorld->isHead() ? plannedQCount : 0,mpiWorld->isHead() ? plannedPairCount : 0};
+	responseWorld->allReduce(workload,2,MPIUtil::ReduceSum);
+	logPrintf("KI response workload: %d independent q points across %d groups; %d independent orbital-q pairs, %d sector solves.\n",
+		workload[0],nQGroups,workload[1],workload[1]*(p.kiSpinResponse ? 2 : 1));
+	logPrintf("KI group %d/%d: %d independent q points assigned.\n",responseGroups.index+1,nQGroups,plannedQCount); logFlush();
 	int computedQCount=0,lastComputedQ=-1;
-	auto printScreeningProgress=[&](int iq,int orbital,const char* activity) {
-		logPrintf("KI group %d/%d: %s q %d, mesh q %d/%d [%.8g %.8g %.8g], orbital %d/%d: %s.\n",
+	auto printScreeningProgress=[&](int iq,int orbital,const char* activity,double elapsedSeconds=-1.) {
+		logPrintf("KI group %d/%d: %s q %d/%d, mesh q %d/%d [%.8g %.8g %.8g], orbital %d/%d: %s",
 			responseGroups.index+1,nQGroups,symmetryAudit ? "audit" : "computed",
-			computedQCount,iq+1,nk,qmesh[iq][0],qmesh[iq][1],qmesh[iq][2],orbital+1,nCenters,activity);
-		logFlush(); // Announce the active pair before its potentially long solve.
+			computedQCount,plannedQCount,iq+1,nk,qmesh[iq][0],qmesh[iq][1],qmesh[iq][2],orbital+1,nCenters,activity);
+		if(elapsedSeconds>=0.) logPrintf(" completed in %.2f s.\n",elapsedSeconds);
+		else logPrintf(".\n");
+		logFlush(); // Flush both start and completion messages promptly.
 	};
 	// Bare conduction corrections depend only on frozen orbital sources. Form
 	// one orbital's owned-q potentials, convolve them across the mesh, and
@@ -908,16 +962,7 @@ void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 			if(wannier.koopmansVerbose) {
 				logPrintf("KI orbital %d/%d, q %d/%d [%.8g %.8g %.8g]\n",n+1,nCenters,iq+1,nk,q[0],q[1],q[2]); logFlush();
 			}
-			complexScalarField rho;
-			if(fftCorrelation) rho=correlation->source(n,iq);
-			else {
-				nullToZero(rho,e.gInfo); initZero(rho);
-				for(int ik=0; ik<nk; ik++) {
-					complexScalarField shifted=clone(orbital[plus[ik].index][n]);
-					multiplyBlochPhase(shifted,-plus[ik].wrap);
-					rho+=(1./nk)*conj(orbital[ik][n])*shifted;
-				}
-			}
+			complexScalarField rho=orbitalSource(n,iq,plus);
 			auto potential=orbitalPotentials(rho,q);
 			// getdVsclocPsi returns a quadrature-weighted potential, JdagOJ V.
 			// A spin-up orbital has charge and magnetization source rho. Its
@@ -944,11 +989,14 @@ void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 					printScreeningProgress(iq,n,p.magneticResponse ? "magnetic response" : "charge response");
 					p.dVext->dVextpq=complexScalarFieldArray(1,(1./e.gInfo.dV)*potential[channel]);
 					p.dVext->dVextmq=conj(p.dVext->dVextpq);
+					const double responseStart=clock_us();
 					solver.solvePerturbation();
 					if(!std::isfinite(p.lastResponseResidual) || p.lastResponseResidual>10*wannier.koopmansTolerance)
 						die("Koopmans screening response did not converge (%s sector). Increase nIterations or improve the DFT state.\n",
 							p.magneticResponse ? "magnetic" : "charge");
 					response+=dot(p.dnpq[0],potential[channel]).real()/nk;
+					printScreeningProgress(iq,n,p.magneticResponse ? "magnetic response" : "charge response",
+						1e-6*(clock_us()-responseStart));
 				}
 				p.magneticResponse=false;
 				reuse.record(rho,n,occupations[n],iq,bareTerm,response);
