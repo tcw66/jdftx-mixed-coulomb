@@ -1,28 +1,87 @@
-# JDFTx with mixed Coulomb truncation, DFPT phonons and electron–phonon coupling
+# JDFTx with mixed Coulomb electrostatics, Koopmans bands and DFPT
 
-This version of [JDFTx](https://github.com/shankar1729/jdftx) adds defect-only
-mixed Coulomb truncation for localized, neutral defects on periodic slabs.
-The clean host retains slab electrostatics, while the defect-induced total
-charge is treated with an isolated Wigner–Seitz Coulomb kernel.
+This version of [JDFTx](https://github.com/shankar1729/jdftx) provides:
 
-This build also adds primitive-cell density-functional perturbation theory
-(DFPT) phonons for insulators and metals, Fourier interpolation of phonon
-dispersions, and screened electron–phonon matrix elements in the native
-phonon/Wannier format. DFPT supports periodic and slab Coulomb, including slab
-embedding, for phonons and electron–phonon coupling. These capabilities
-run through `jdftx` or `jdftx_gpu` and use the primitive-cell electronic FFT grid.
+- Defect-only mixed Coulomb truncation for localized, neutral defects on
+  periodic slabs, with self-consistent and one-shot potential workflows.
+- Single-spin Koopmans (KI) corrections around a spin-unpolarized PBE ground
+  state, symmetry reuse, parallel response groups and KI/PBE band comparison.
+- Primitive-cell DFPT phonons and screened electron–phonon matrix elements,
+  with periodic/slab electrostatics, Fourier interpolation and response
+  solver, symmetry and cache optimizations.
+- CPU and CUDA executables in one shared build directory.
 
-The shared local `build/` contains CPU executables (`jdftx`, `wannier`,
-`phonon`) and GPU executables with the `_gpu` suffix. It includes the DFPT
-solver, memory and electron–phonon export optimizations. From `jdftx/`, run
-`cmake --preset unified` and `cmake --build --preset unified`. The `cpu` and
-`gpu` build presets select targets from that same configuration; both
-configure presets keep CUDA enabled so switching targets preserves GPU support.
-The configuration uses Release mode, MPI, disabled profiling, CUDA 12 and
-architecture 89 on this machine. Source `default-env.sh` from the repository
-root to select these executables. `build-gpu` is a compatibility symlink to
-`build/`. Previous configurations, runtimes and diagnostic results are saved
-in `archive/build-cleanup-20261012/`.
+This is the main project guide, including the complete mixed Coulomb method
+and usage instructions. Material-specific inputs and walkthroughs are linked
+in the relevant sections.
+
+## Contents
+
+- [Build](#build)
+- [KI and original PBE band comparison](#ki-and-original-pbe-band-comparison)
+  - [KI input reference](#ki-input-reference)
+- [Mixed Coulomb features](#mixed-coulomb-features)
+  - [Clean reference](#clean-reference)
+  - [Defect SCF](#defect-scf)
+  - [Outputs and supported scope](#outputs-and-supported-scope)
+  - [Mixed Coulomb validation](#mixed-coulomb-validation)
+  - [One-shot potential construction for NSCF](#one-shot-potential-construction-for-nscf)
+  - [Embedded mixed Coulomb truncation](#embedded-mixed-coulomb-truncation)
+- [Primitive-cell DFPT phonons](#primitive-cell-dfpt-phonons)
+- [Electron–phonon matrix elements](#electronphonon-matrix-elements)
+- [Tests](#tests)
+- [Upstream and license](#upstream-and-license)
+
+## Build
+
+Install the normal JDFTx dependencies: C++ compiler, CMake, GSL, FFTW,
+BLAS/LAPACK and MPI. The supplied shared-build presets also require CUDA 12
+at `/usr/local/cuda-12` and select CUDA architecture 89 for the RTX 4090s in
+this workspace. Adjust the CUDA toolkit path and architecture for other
+machines.
+
+From the repository root, configure and build all six CPU/GPU executables:
+
+```bash
+cmake --preset unified -S jdftx
+cmake --build build --parallel 4 --target \
+    jdftx wannier phonon jdftx_gpu wannier_gpu phonon_gpu
+```
+
+Alternatively, run `cmake --preset unified` and
+`cmake --build --preset unified` from `jdftx/`. The `cpu` and `gpu` presets
+select subsets of targets in the same CUDA-enabled configuration. Release
+mode and MPI are enabled; profiling is disabled.
+
+The shared `build/` contains `jdftx`, `wannier`, `phonon` and their `_gpu`
+versions. Source `default-env.sh` from the repository root to select them.
+`build-gpu` is a local compatibility symlink to `build/`; previous configurations
+and diagnostic results are archived in `archive/build-cleanup-20261012/`.
+The DFPT phonon and electron–phonon commands run through `jdftx` or
+`jdftx_gpu`; the separate `phonon` executable provides the existing
+supercell finite-difference workflow.
+
+Build the mixed Coulomb utilities and native validation tools as needed:
+
+```bash
+cmake --build build --parallel 4 --target \
+    ConstructDefectPotential ConstructDefectPotential_gpu \
+    TestDefectCoulomb TestDefectCoulomb_gpu TestDFPT
+```
+
+For a CPU-only installation without CUDA, configure a separate directory:
+
+```bash
+cmake -S jdftx -B build-cpu -DEnableCUDA=OFF -DEnableMPI=ON \
+    -DCMAKE_BUILD_TYPE=Release
+cmake --build build-cpu --parallel 4 --target \
+    jdftx wannier phonon ConstructDefectPotential TestDefectCoulomb TestDFPT
+```
+
+Use that directory instead of `build` in the commands below. Provide
+pseudopotentials through JDFTx's normal search paths or `JDFTX_PSEUDO_DIR`.
+Python 3 is needed for utility wrappers and regression scripts; band and
+phonon plotting dependencies are listed with their workflows.
 
 ## KI and original PBE band comparison
 
@@ -57,8 +116,20 @@ the original DFT total energy and writes the corrected spectral Hamiltonian.
 response. Verified orbital/q symmetry reuse, occupied-state response columns,
 MPI q groups and bounded caches reduce repeated work. The optional
 `wannier-koopmans-screening-mesh` changes only the q quadrature for screening;
-the electronic mesh and bare Hamiltonian keep the full resolution. Detailed
-iterations are enabled with `wannier-koopmans-verbose yes`.
+the electronic mesh and bare Hamiltonian keep the full resolution.
+The response planner reports the number of independent q points before solves
+start. For the current 8×8×8 conduction functions at symmetry tolerance `1e-4`,
+this is **65 q points**, 300 orbital–q pairs and 600 charge/magnetic sector
+solves. Progress uses each MPI group's assigned q total, and each completed
+sector prints its elapsed solve time. These counts depend on the Wannier
+functions and settings. Detailed iterations are enabled with
+`wannier-koopmans-verbose yes`.
+
+The [KI input reference below](#ki-input-reference) documents the command syntax,
+native defaults, spin treatment, logging, solver controls, caches and coarse
+screening. The [silicon example guide](examples/koopmans/README.md) also documents
+localization settings, workflow/script options, environment variables and
+output formats.
 
 Wannier restart fingerprints invalidate rotations and overlap caches when
 the saved SCF wavefunctions change. KI regressions cover spin kernels,
@@ -66,29 +137,532 @@ projector caches, mesh correlations, occupied-state response, symmetry reuse,
 solver agreement, coarse screening and MPI q groups. Run them with
 `ctest --test-dir build -R '^(koopmans|projectorCache|kMeshCorrelation|batchedProjectors)' --output-on-failure`.
 
+### KI input reference
+
+All commands below belong in a Wannier input. `yes` and `no` are literal
+boolean values. Arguments to `wannier-koopmans` and
+`wannier-koopmans-response` are **positional**, in the order shown. Omitting
+trailing arguments uses native defaults; to change a later argument, supply
+all earlier arguments. The angle brackets below name arguments and are not
+part of a runnable input. The ancillary `wannier-koopmans-*` commands require
+`wannier-koopmans` to be present.
+
+The supported ground state is a nonmagnetic insulator (`spintype no-spin`)
+with fixed integer occupations, nonrelativistic norm-conserving pseudopotentials,
+an analytic semilocal LDA/GGA XC kernel and a Gamma-centered uniform electronic
+mesh. KI currently requires **3D periodic Coulomb without embedding or electric
+fields**; slab/mixed Coulomb KI, metals, spin-polarized ground states, hybrids,
+meta-GGAs and DFT+U are unsupported. Store at least one empty band so the
+implementation can check the DFT gap. SCF symmetry reduction
+is supported: KI reconstructs the full electronic mesh. Occupied and empty
+Wannier manifolds are localized separately in this example. KI changes the
+spectral Hamiltonian; the underlying DFT total energy is retained.
+
+#### `wannier-koopmans`
+
+```text
+wannier-koopmans <epsilonInfinity> <nIterations> <residualTol> <reduceSymmetry> <symmetryTol> <occupiedResponse> <qGroups> <optimizeResponse>
+```
+
+The current silicon example line in
+`examples/koopmans/ki-response.in` is:
+
+```text
+wannier-koopmans 0 400 1e-7 yes 1e-4 yes 2 yes
+```
+
+This example requests two q groups and therefore needs at least two MPI ranks.
+For a single-rank launch, set `qGroups` to `1`. Simply adding
+`wannier-koopmans` with no arguments enables KI with all native defaults:
+
+```text
+wannier-koopmans 0 300 1e-7 yes 1e-6 yes 1 yes
+```
+
+The command runs after Wannier localization and writes `mlwfHki` (corrected
+Hamiltonian), `mlwfKI` (correction), `koopmansScreening` (orbital curvatures and
+screening coefficients), `koopmansBands` and interpolation/format sidecars.
+The original projected PBE Hamiltonian is `mlwfHki - mlwfKI`. No extra spin
+factor should be applied when reading these outputs.
+
+| Argument | Native default | Example | Meaning and restrictions |
+|---|---:|---:|---|
+| `epsilonInfinity` | `0` | `0` | Dimensionless electronic dielectric constant for the point-charge Ewald image correction. `0` selects neutralizing-background electrostatics without that correction; converge the screening mesh. A finite value **≥1** enables the isotropic correction for cubic materials: the Gamma image term enters bare curvature as `D` and relaxed curvature as `D/epsilonInfinity`. Values between 0 and 1 and negative values are rejected. |
+| `nIterations` | `300` | `400` | Positive maximum iteration count for a response solve. This is distinct from the localization iteration count in `wannier-minimize`. In nested mode it limits the inner solves; the outer cap is `mixIterations` below. |
+| `residualTol` | `1e-7` | `1e-7` | Positive, finite relative response tolerance. A smaller value requests a more accurate solve. The final reconstructed response residual is also checked; a nonfinite residual or one exceeding ten times this tolerance aborts KI. |
+| `reduceSymmetry` | `yes` | `yes` | Reuse a scalar screening response only after the transformed orbital source passes the numerical equivalence checks. `no` solves every selected orbital–q pair and provides an exhaustive reference. This does not discard terms from the full-mesh bare Hamiltonian. |
+| `symmetryTol` | `1e-6` | `1e-4` | Dimensionless relative tolerance for source norm, phase-aligned source-field mismatch and bare-curvature agreement. Must be finite and satisfy **0 < tolerance ≤ 0.01**. Smaller values reject more approximate mappings. This is a symmetry acceptance tolerance, independent of `residualTol`. The example currently uses `1e-4`; the native default remains `1e-6`. Check audit errors and reduced/exhaustive agreement when changing it. |
+| `occupiedResponse` | `yes` | `yes` | Keep only occupied response columns for both valence and conduction perturbations. The full plane-wave response space remains available, including empty-state response components. Here that gives 4 columns rather than 60 stored-band columns. `no` uses all stored columns as a reference; it does not select a different Wannier manifold. |
+| `qGroups` | `1` | `2` | Integer number of independent MPI response groups. Must be between 1 and the launched MPI rank count. Each group retains k-point parallelism; symmetry-connected q stars stay together for reuse. The active count can be reduced to the number of available screening q stars. This does not set the MPI rank count; set that in the launcher separately. |
+| `optimizeResponse` | `yes` | `yes` | Enable frozen XC-kernel reuse, complex-potential application, reused GGA gradients, frozen-orbital caches, batched GPU operations and q-star scheduling. `no` selects reference operators and the original q traversal for comparison. These optimizations retain the response equations and requested tolerance. |
+
+Orbital symmetry reuse concerns the actual Wannier sources, rather than
+crystal geometry alone. A rotation may map an orbital to another orbital at
+a different q. A symmetry that mixes orbitals does not automatically permit
+copying one orbital's response. Equal centers or spreads alone are insufficient.
+The cached source is transformed with crystal rotations/translations,
+reciprocal wrapping and optional time reversal; an overall source phase is
+removed before comparing fields. Accepted source and curvature errors must
+both pass the configured checks.
+
+#### `wannier-koopmans-spin`
+
+```text
+wannier-koopmans-spin <spinResolved>
+```
+
+`spinResolved` is `yes` by default and in this example. A single spin orbital
+has charge source `n_i = rho_i` and magnetization source `m_i = rho_i`.
+The implementation solves separate charge and magnetic responses and combines
+their contractions; the Hartree kernel appears only in the charge sector.
+The PBE ground state remains spin unpolarized. Do not apply an additional
+spin-degeneracy factor to the emitted KI Hamiltonian or screening coefficients.
+`no` selects the legacy charge-only calculation for diagnostics. The same
+source-symmetry checks apply to both modes; spin treatment does not switch off
+orbital symmetry reuse.
+
+#### `wannier-koopmans-verbose`
+
+```text
+wannier-koopmans-verbose <verbose>
+```
+
+`verbose` defaults to `no`, as in the example. `no` retains progress for
+independent orbital–q responses, final residuals, screening summaries and
+warnings/errors. `yes` additionally prints individual response iterations,
+k-point/basis listings and symmetry-reuse messages. It controls native log
+files as well as terminal output. Before response solves, a source-only symmetry
+planning pass reports the global number of independent q points, orbital–q
+pairs and charge/magnetic sector solves. It uses the actual localized orbitals,
+symmetry tolerance, selected screening mesh and cache budget; the current
+8×8×8 conduction setup at tolerance `1e-4` needs **65 independent q points**,
+300 orbital–q pairs and 600 sector solves. This is not a universal count for
+every 8×8×8 calculation. Each group reports its assigned independent-q total.
+The group-local `computed q i/N` counter advances
+only when a new q needs an independent response; it is not a q-star number
+or a fraction of the full mesh. Other orbitals and spin sectors at that q
+retain its counter value. After each completed charge or magnetic response,
+a matching progress line reports the wall-clock solve duration in seconds
+(`charge response completed in 123.45 s.`). These timings remain visible with
+`verbose no` and are written to the main or corresponding q-group log.
+Symmetry-reused responses and source-only audits do not print solve timings.
+
+#### `wannier-koopmans-screening-mesh`
+
+```text
+wannier-koopmans-screening-mesh <nq0> <nq1> <nq2>
+```
+
+All three dimensions are required positive integers. Each must divide the
+corresponding electronic `kpoint-folding` dimension. Omit the command to use
+the full electronic mesh for screening. For an 8×8×8 electronic mesh,
+`4 4 4`, `2 2 2` and `1 1 1` are valid; `3 3 3` is not.
+
+The implementation samples a Gamma-centered subset of q points and uses
+properly normalized quadrature weights for the bare/relaxed curvature ratio
+that determines `alpha`. Electronic k integration, orbital sources, the bare
+spectral Hamiltonian and band interpolation retain the full 8×8×8 mesh.
+This is an approximation to screening and needs convergence against a finer
+screening mesh.
+
+In `examples/koopmans/ki-screening-mesh.in`, the line below is **commented out**, so coarse
+screening is currently disabled:
+
+```text
+# wannier-koopmans-screening-mesh 4 4 4
+```
+
+Remove the leading `#` to enable it for the next native launch. Editing an
+input does not change a running process. Gamma-only screening (`1 1 1`) is
+useful for a diagnostic comparison; a source-symmetry check at Gamma does not validate
+it as a production gap approximation.
+
+#### `wannier-koopmans-response`
+
+```text
+wannier-koopmans-response <nested> <independentBandCG> <mixFraction> <mixHistory> <mixIterations> <orbitalCacheMiB> <symmetryCacheMiB> <contractionCacheMiB>
+```
+
+The example supplies all eight native defaults explicitly:
+
+```text
+wannier-koopmans-response no yes 0.4 8 80 2048 512 4096
+```
+
+| Argument | Default | Meaning and restrictions |
+|---|---:|---|
+| `nested` | `no` | `no` uses coupled MINRES for screening. `yes` uses fixed-potential inner Sternheimer solves with outer induced-potential mixing. The response tolerance remains the `wannier-koopmans` value. |
+| `independentBandCG` | `yes` | In nested mode, solve bands with independently converged CG, falling back to MINRES for nonpositive curvature or a nondiagonal occupied Hamiltonian. `no` uses MINRES inner solves. This setting does not change the default coupled solver when `nested=no`. |
+| `mixFraction` | `0.4` | Finite outer mixing fraction, **0 < fraction ≤ 1**. Active in nested mode; smaller values mix a smaller potential update. |
+| `mixHistory` | `8` | Positive integer number of previous outer mixing entries retained. Active in nested mode. |
+| `mixIterations` | `80` | Positive maximum number of outer mixing iterations. Active in nested mode; separate from the inner response and localization iteration caps. |
+| `orbitalCacheMiB` | `2048` | Finite nonnegative per-rank budget in MiB for frozen real-space wavefunctions. `0` disables this cache. Used with response optimization enabled. |
+| `symmetryCacheMiB` | `512` | Finite nonnegative budget in MiB for cached source densities on each q-group head. `0` disables retained sources, reducing reuse opportunities. Optimized scheduling releases sources after each q star. The reference path currently uses its fixed 256 MiB source-cache budget. |
+| `contractionCacheMiB` | `4096` | Finite nonnegative per-rank budget in MiB for optimized mesh-correlation/conduction-contraction storage, including FFT source/workspace caches or packed-orbital fallback storage. `0` disables the corresponding retained storage. `JDFTX_KI_CORRELATION_CACHE_MIB` can override the FFT source/workspace budget separately. |
+
+One MiB is 1,048,576 bytes. Cache budgets are per rank/group head, not a
+single total allocation limit; other wavefunctions, solver vectors and CUDA
+storage also consume memory. Insufficient cache space selects fallback
+paths or reduces reuse rather than changing the physical equations. Nested
+mode can be used without operator optimization. The coupled default was faster than the tested nested alternatives on the
+small fixed-orbital valence benchmark; compare the solvers for the intended
+material and mesh. `wannier-koopmans-response` does not enable coarse screening: use
+`wannier-koopmans-screening-mesh` explicitly for that approximation.
+
 ## Mixed Coulomb features
 
-The mixed Coulomb implementation includes:
+This source tree implements the fixed-ion SCF method in
+`Defect_Only_Coulomb_Truncation_O_Ag111.pdf`. At every electronic density/potential
+evaluation it adds (for unembedded truncation)
 
-- A variational correction to the electronic SCF potential and energy, using
-  a fixed clean-system reference.
-- Support for Coulomb embedding and a separate isolated-defect embedding center.
-- `defectDensityToVscloc`, a one-shot utility that constructs a native `Vscloc`
-  and an NSCF input from clean and defect electronic densities and geometries.
-- CPU/CUDA implementations and regression tests for SCF, potential construction,
-  embedding, and finite-difference derivatives.
+```
+deltaRho = (n + rhoIon) - (nClean + rhoIonClean)
+Vcorr = (Kisolated - Kslab) deltaRho
+EdefectCoulomb = 0.5 * integral(deltaRho * Vcorr)
+```
 
-See [the method and usage guide](README-defect-coulomb.md) for input commands,
-reference generation, charge conventions, embedding settings, limitations, and
-validation. The original [method outline](Defect_Only_Coulomb_Truncation_O_Ag111.pdf)
-is also included.
+The clean reference remains fixed. The ordinary slab calculation still treats the
+periodic host; the isolated 3D Wigner–Seitz kernel acts on the defect-induced
+charge. Exchange-correlation and short-range/nonlocal pseudopotentials keep their
+ordinary dependence on the full electronic density. The correction enters the
+SCF potential before orbital solution and mixing, and its energy enters the
+reported total energy. Both density and potential mixing are supported.
 
-The difference charge includes both electrons and the ionic Coulomb source.
-This matters when adding or removing atoms: the electronic density difference
-alone need not be neutral. The current SCF method supports fixed ions and cell,
-neutral vacuum calculations, and disabled spatial symmetries. Localization of
-the difference charge must be checked for the chosen cell and embedding center.
-A one-shot potential does not make its supplied density self-consistent.
+JDFTx's charge convention is positive electronic number density and negative
+ionic charge. Both parts must be included: subtracting only the electronic
+densities after adding O leaves a charged difference. Core densities used only
+for exchange-correlation are excluded. The ionic source is the **bare** charge
+that generates the long-range part of `Vlocps`, independently of `ion-width`.
+For unembedded truncation, both source and correction potential are projected onto the real FFT grid
+with `I`/`J`; this removes unrepresentable point-ion Nyquist components and makes
+the energy, real-space potential, and ionic derivative consistent on that grid.
+
+### Clean reference
+
+First relax and converge the clean slab with the lattice, pseudopotentials,
+cutoffs, spin treatment, smearing, and FFT grid intended for the defect run.
+Use slab truncation, with or without embedding. Preserve the Coulomb settings
+that generated the density. In the final clean calculation add:
+
+```text
+coulomb-interaction Slab 001
+symmetries none
+# Keep your lattice, species, ions, k points, cutoffs and smearing here.
+dump-name clean.$VAR
+dump End State ElecDensity DefectReference
+```
+
+`clean.defectReference` contains the converged spin-summed electronic density,
+the ionic Coulomb source at the clean geometry, and metadata. There is no need to
+reconstruct clean ions in the defect calculation, or to supply an atomic-density
+approximation. The stored reference can represent either the relaxed pristine
+surface or a separately converged frozen-host geometry.
+
+To export an already converged calculation with saved wavefunctions, use its
+original input/settings and ionic positions, plus:
+
+```text
+initial-state clean.$VAR
+dump-only
+dump-name clean.$VAR
+dump End DefectReference
+```
+
+Remove an explicit `wavefunction` command when using `initial-state`. A raw
+`clean.n` file alone is insufficient: it lacks the reference ionic contribution
+and the cell/grid metadata. The new reference dump packages the needed inputs.
+
+### Defect SCF
+
+Use the same cell and grid, and add the defect to your ionic input. Keep the
+reference and current geometries in the same coordinate origin. For O/Ag(111),
+keep Ag pseudopotentials identical to the clean run and add the O species/ion.
+
+```text
+coulomb-interaction Slab 001
+symmetries none
+electronic-scf
+defect-coulomb clean.defectReference
+
+dump-name defect.$VAR
+dump End State ElecDensity Vscloc Ecomponents Dvac DefectCoulomb
+```
+
+The optional second argument of `defect-coulomb` is an absolute neutrality
+tolerance in electrons, default `1e-5`. Each density evaluation checks the
+integral of `deltaRho`; a failure aborts without silently inserting a charge
+background. Each SCF report includes `Qdefect` and `Ecorr`.
+
+At startup the reader checks the file version and payload length, cell, grid,
+cutoffs, slab direction, spin treatment, smearing, finite density values,
+reference neutrality, and the valence charge and content fingerprint of each
+host pseudopotential. Host atoms may move between the separately prepared clean
+and defect geometries; the difference includes their charge displacement.
+Added defect species are permitted. Use the same k-point sampling and functional
+in both runs; these are workflow requirements, not checked by the reference
+header. Verify electronic convergence before exporting the reference.
+
+### Outputs and supported scope
+
+`dump End DefectCoulomb` writes `defect.deltaRho` and `defect.Vcorr` as standard
+JDFTx real-space binary grids. `Dvac` and `Dtot` include the correction as well.
+Use `potential-subtraction no` in both clean and defect runs when comparing the
+unsmoothed electrostatic potentials directly. The energy component is named
+`EdefectCoulomb`.
+
+This implementation supports neutral, fixed-electron-number, vacuum SCF
+calculations with fixed ions and lattice, slab truncation with optional embedding, and
+`symmetries none`. It rejects ionic/lattice optimization, molecular dynamics,
+stress, vibrations, variational perturbation calculations, fluids, external
+charges/fields, and fixed chemical potential. The explicit ionic correction is
+included in force evaluation and has a finite-difference regression check;
+geometry optimization remains disabled pending surface-system force validation.
+Spin-unpolarized, collinear and noncollinear densities are summed over their
+diagonal charge components; regression checks cover unpolarized and collinear
+cases. The existing exchange kernel is unchanged.
+
+The density difference must be localized within the support allowed by isolated
+WS truncation. In the unembedded scheme, charge separations must fit inside the
+truncation cell (the usual half-cell confinement requirement). Plot
+`deltaRho` and `Vcorr` and check their lateral behavior. The code checks
+neutrality, but does not certify localization. See the
+[JDFTx Coulomb-interaction documentation](https://jdftx.org/CommandCoulombInteraction.html)
+for the truncation confinement requirement.
+
+The regression system is a small neutral He host with a localized He addition;
+it validates the implementation, rather than the physical approximation for
+O/Ag(111). The PDF's
+O/Ag force checks, lateral-size comparisons, and local Wannier-Hamiltonian
+localization study remain necessary before interpreting production results.
+
+### Mixed Coulomb validation
+
+Build the utility and validation targets listed in [Build](#build), then run:
+
+```bash
+export JDFTX_PSEUDO_DIR=/path/to/jdftx/pseudopotentials
+export OPENBLAS_NUM_THREADS=1
+export OMP_NUM_THREADS=2
+ctest --test-dir build -R '^defectCoulomb$' --output-on-failure
+```
+
+The integration test has 23 checks: clean recovery, a nonzero converged defect
+correction, charge neutrality, real-space energy/potential consistency,
+collinear spin recovery, a hexagonal cell with potential mixing and smearing, independence from ionic plotting width, and rejection
+of missing, truncated, incompatible, or charged reference files. Like other
+JDFTx tests, successful `.out` files are reused; clear the test run's outputs
+when rerunning calculations after source changes.
+
+The additional native test checks density energy derivatives, insertion into
+the KS potential and total energy, the frozen reference, preservation of the
+ionic source, and the explicit ionic derivative through the pseudopotential
+force path:
+
+```bash
+cd build/test/defectCoulomb
+export SRCDIR=../../../jdftx/test/defectCoulomb
+../../aux/TestDefectCoulomb -i "$SRCDIR/recovery.in" -o derivatives.out
+```
+
+For MPI, set `JDFTX_LAUNCH='mpirun -n 2'` before rerunning the integration test.
+GPU builds use the same field operators; enable CUDA and build `jdftx_gpu` and
+`TestDefectCoulomb_gpu`. For the RTX 4090s in this workspace, the GPU build is
+configured in the shared `build/` with CUDA architecture 89.
+
+The main implementation is in `jdftx/electronic/DefectCoulomb.{h,cpp}`, with input
+handling in `jdftx/commands/defect_coulomb.cpp` and integration into `ElecVars`,
+`IonInfo`, `SCF`, and `Dump`.
+
+Validation completed in this workspace: all 23 integration checks passed on
+CPU (including two MPI processes) and CUDA. Native density, KS-potential, energy,
+and ionic finite-difference checks passed on CPU/MPI and CUDA; orthorhombic and
+hexagonal cells were checked. Existing `openShell`, `graphene`, and `checkpoint`
+regressions passed. These checks preceded the embedded tests described below.
+
+### One-shot potential construction for NSCF
+
+`jdftx/scripts/defectDensityToVscloc` takes the saved clean and defect electronic
+densities and constructs the corrected **full local KS potential** once. It uses
+JDFTx itself to evaluate slab Hartree, local pseudopotentials, XC (including
+partial core corrections), and the defect correction. It preserves JDFTx's
+internal `Vscloc` normalization and spin channel naming, so the result can be
+read directly with `fix-electron-potential`.
+
+Run from the source-tree root:
+
+```bash
+./jdftx/scripts/defectDensityToVscloc \
+  --clean-input /path/to/clean.in \
+  --defect-input /path/to/defect.in \
+  --clean-density /path/to/clean.n \
+  --defect-density /path/to/defect.n \
+  --output-prefix /path/to/nscf/defect-mixed
+```
+
+The two input files supply the lattice, grid, ionic geometries,
+pseudopotentials, spin treatment and functional. Their ionic positions must
+match the saved densities, including any prior relaxation. The script expands
+includes and environment variables through JDFTx's input reader, and runs each
+stage from that original input file's directory. It ignores the original
+SCF/minimization, wavefunction/restart and dump controls; no orbitals are
+allocated or solved, and no density iteration occurs. It retains the original
+FFT grid, then disables symmetry averaging of the corrected potential.
+
+For wildcard species such as `SG15/$ID_ONCV_PBE.upf`, the script uses the usual
+JDFTx search paths. If `JDFTX_PSEUDO_DIR` is unset, it also looks for the library
+beside `jdftx` or `jdftx_gpu` on your `PATH` (including the installed library
+under `share/jdftx/pseudopotentials`). Use `--pseudo-dir /path/to/pseudopotentials`
+to set the additional search directory explicitly. The selected directory is
+printed, and the generated NSCF input records absolute paths to the actual
+pseudopotential files used for potential construction.
+
+For collinear spin, supply quoted filename patterns instead:
+
+```bash
+--clean-density '/path/to/clean.$VAR' \
+--defect-density '/path/to/defect.$VAR'
+```
+
+JDFTx reads `n_up` and `n_dn`; noncollinear calculations additionally need `n_re`
+and `n_im`. A raw `.n_up` filename is also accepted and converted to the pattern.
+The raw files must be standard JDFTx `ElecDensity` dumps on matching grids.
+Their byte counts are checked, but raw densities contain no cell metadata:
+the supplied input files must actually describe the calculations that produced
+them. The clean ionic charge is reconstructed at the clean geometry and stored
+in the generated reference, rather than inferred from the defect geometry.
+
+Outputs with this prefix are:
+
+- `.Vscloc` (or `.Vscloc_up`, `.Vscloc_dn`, and noncollinear off-diagonal channels)
+- `.Vcorr` and `.deltaRho` for diagnostics (also `.deltaRhoEffective` with embedding)
+- `.defectReference`, containing the clean density and reconstructed clean ions
+- `.clean.in`/`.defect.in` recipes and `.clean.out`/`.defect.out` logs
+- `.nscf.in`, a fixed-potential NSCF input with the exact FFT grid
+
+Run the generated NSCF input from the original defect-input directory. It
+already contains:
+
+```text
+fix-electron-potential /path/to/nscf/defect-mixed.$VAR
+```
+
+Adjust k points and `elec-n-bands` there for the desired NSCF calculation. Keep
+the cell, density grid, spin treatment, ionic geometry and pseudopotentials
+consistent. Do not add `defect-coulomb` or `electronic-scf` to this NSCF input;
+the saved potential already includes the correction. The ordinary nonlocal
+pseudopotential operator is provided by the retained species settings.
+
+This path accepts internal LDA/GGA functionals, neutral vacuum slabs
+and slab truncation with optional embedding. It rejects hybrids, meta-GGAs, orbital-dependent
+functionals and DFT+U, which require data beyond two electronic densities.
+The same neutrality and reference compatibility checks apply as in SCF mode.
+Use `--charge-tolerance` to change the default `1e-5` electron tolerance, and
+`--overwrite` to reuse an output prefix. Source densities are preserved.
+
+Add `--gpu` to use CUDA, or `--launcher 'mpirun -n 2'` to launch the backend with
+MPI. `--engine` selects a specific `ConstructDefectPotential` executable. Both
+CPU and GPU backends have been built in this workspace; to rebuild:
+
+```bash
+cmake --build build --parallel 4 --target \
+    ConstructDefectPotential ConstructDefectPotential_gpu
+```
+
+The potential is evaluated at the supplied defect density. If that density came
+from a conventional periodic calculation, the one-shot correction does **not**
+make it self-consistent under mixed electrostatics; use the corrected SCF path
+when that electronic response is required.
+
+`ctest --test-dir build -R '^defectPotential$' --output-on-failure` runs the
+required density fixture and the end-to-end one-shot regression. It compares
+the complete potential with an ordinary fixed-density JDFTx calculation having
+the identical `Vcorr` added externally, covers spin and hexagonal/smearing cases,
+checks source-density preservation and overwrite protection, and performs an
+actual NSCF solve using the generated potential.
+
+The one-shot regression passed on CPU and CUDA in this workspace, including
+actual fixed-potential NSCF solves. The two-process MPI script launch was also
+validated.
+
+### Embedded mixed Coulomb truncation
+
+Keep `coulomb-truncation-embed` in the clean and defect inputs. Both the normal
+embedded slab Hamiltonian and the mixed correction are supported in SCF and in
+the one-shot utility. The isolated operator doubles its auxiliary Coulomb grid
+in all three directions; the slab operator doubles only its truncated direction.
+The wavefunction cell and density grid stay the same.
+
+Version-2 clean references record the embedding mode, center in lattice
+coordinates, and ionic margin, and preserve the complete bare ionic Fourier
+source. These settings must agree between reference generation and the defect
+run. Centers differing by integer lattice vectors are equivalent. Version-1
+references remain readable for unembedded calculations; regenerate them for
+embedded calculations. Raw density files contain no record of the Coulomb
+settings: supply the physical settings that actually generated the densities.
+Removing embedding from a reconstruction input changes its underlying potential.
+
+With embedding, let `S` be JDFTx's Gaussian range-separation filter (its width is
+taken from the slab Coulomb operator), and `D=Kisolated-Kslab` on smooth sources.
+The common ionic short-range kernel cancels between the two operators. The
+numerical correction is
+
+```text
+deltaN = n - nClean
+deltaIon = rhoIonBare - rhoIonBareClean
+deltaRhoEffective = deltaN + S deltaIon
+Vcorr = D deltaRhoEffective
+EdefectCoulomb = 0.5 * integral(deltaRhoEffective * Vcorr)
+ionicGradientPotential = S Vcorr
+```
+
+This is equivalent to applying the difference of JDFTx's `PointChargeRight`
+operators to the ionic difference, and smooth operators to the electron
+difference. The ionic derivative uses the adjoint Gaussian filter so the energy
+and forces remain consistent. It does not change the local/nonlocal
+pseudopotentials or add another ionic short-range contribution. Range separation
+is independent of the `ion-width` used for fluid/plotting charges.
+
+`dump End DefectCoulomb` additionally writes `deltaRhoEffective` when embedding
+is enabled. Use this field with `Vcorr` for the real-space energy check;
+`deltaRho` retains the unsmoothed total difference for charge diagnostics.
+
+The isolated operator inherits all three components of the slab embedding
+center. Its lateral coordinates matter: place the isolated center near the
+localized defect so the difference does not straddle a cut. You can set a
+separate isolated center without changing the slab center:
+
+```text
+coords-type Cartesian
+coulomb-interaction Slab 001
+coulomb-truncation-embed 0 0 18.105968516010567
+defect-coulomb clean.defectReference
+defect-coulomb-center 2.771410394108804 8.001439334819281 18.105968516010567
+```
+
+The example uses Cartesian coordinates in bohr. Lattice coordinates are also
+supported. `defect-coulomb-center` requires embedding. The one-shot utility
+preserves this center if it is present in the defect input. Use
+`--defect-center C0 C1 C2` to override it explicitly; its
+coordinates follow the defect input's `coords-type`. The generated NSCF input
+retains the slab embedding command; the saved potential already includes the
+correction.
+
+The confinement condition now refers to the doubled Coulomb box. Charge must
+remain localized away from the cuts of the original cell centered on the
+specified embedding center. Check lateral localization of the defect-induced
+charge, particularly for a small metallic surface supercell. Embedding does not
+establish localization by itself.
+
+The `defectEmbedding` regression covers orthorhombic and hexagonal embedded SCF,
+clean reference recovery, nonzero corrections, one-shot reconstruction against
+ordinary fixed-density JDFTx, finite-difference density and ionic derivatives,
+equivalence to `PointChargeRight`, and rejection of inconsistent embedding
+modes, centers, and ionic margins. Build `TestDefectCoulomb` (or its GPU target)
+before running:
+
+```bash
+ctest --test-dir build -R '^defectEmbedding$' --output-on-failure
+```
 
 ## Primitive-cell DFPT phonons
 
@@ -442,47 +1016,6 @@ The [silicon coupling example](examples/dfpt-silicon-electron-phonon/README.md)
 includes a complete valence-bond Wannier input. See the
 [DFPT method and format guide](jdftx/doc/tutorials/phonon/DFPT.dox) for phase
 conventions, normalization and supported features.
-
-## Build
-
-Install the normal JDFTx dependencies (C++ compiler, CMake, GSL, FFTW,
-BLAS/LAPACK, and MPI for the default configuration), then build from this root:
-
-The local presets build CPU and GPU targets together and also require CUDA
-12 at `/usr/local/cuda-12`. For a CPU-only installation without CUDA, use
-`cmake -S jdftx -B build -DEnableCUDA=OFF` instead of the preset below.
-
-```bash
-cmake --preset cpu -S jdftx
-cmake --build build --parallel --target jdftx wannier phonon \
-    ConstructDefectPotential TestDefectCoulomb
-```
-
-Use `build/jdftx` for the modified SCF calculation and
-`jdftx/scripts/defectDensityToVscloc --help` for the one-shot interface.
-Provide the required pseudopotentials through JDFTx's normal search paths or
-`JDFTX_PSEUDO_DIR`. Python 3 is required for the one-shot wrapper and regression
-scripts. CUDA build details and input examples are in the usage guide.
-
-For the DFPT auxiliary checks, also build `TestDFPT`:
-
-```bash
-cmake --build build --parallel --target TestDFPT
-```
-
-To configure and build the GPU versions, install CUDA and use:
-
-```bash
-cmake --preset gpu -S jdftx
-cmake --build build --parallel --target jdftx_gpu wannier_gpu phonon_gpu \
-    ConstructDefectPotential_gpu TestDefectCoulomb_gpu
-```
-
-The shared `build` in this workspace uses CUDA architecture 89 for the
-RTX 4090 GPUs. Set `CMAKE_CUDA_ARCHITECTURES` for the target hardware when
-configuring a different machine. The DFPT phonon and electron–phonon commands
-are part of the main `jdftx`/`jdftx_gpu` executable; no separate phonon executable
-is needed for those commands.
 
 ## Tests
 
