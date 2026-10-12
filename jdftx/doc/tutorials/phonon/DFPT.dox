@@ -97,7 +97,8 @@ and offset-state setup still use the full mesh. This reduction currently uses
 translation-free operations that preserve q exactly, fix the displaced atom
 without a cell shift, and map its direction to itself or its negative. Other
 operations retain the full response mesh. Disabling q symmetries also disables
-this reduction; electron-phonon export uses explicit full-mesh responses.
+this reduction. Electron-phonon export can use this response reduction while
+contracting matrices with the full saved electronic eigenstates.
 
 `phonon-dfpt-solver nested` selects fixed-potential Sternheimer solves with outer
 response-potential mixing, following the main structure of QE's DFPT solver.
@@ -247,13 +248,48 @@ include conduction bands, use Fermi/Gauss smearing and sufficient `elec-n-bands`
 in both SCF and DFPT. The example in `examples/dfpt-silicon-electron-phonon`
 includes empty bands and a Wannier input.
 
-Export explicitly computes all q points and Cartesian displacements,
-overriding their symmetry reductions. Offset-state reuse and symmetry-reduced
-SCF unfolding remain available. MPI q groups synchronize their source
+Export retains q-point and Cartesian displacement symmetry reductions. Only
+independent responses are solved; their induced local potentials are transformed
+on the FFT grid with atom-cell phases, fractional translations, reciprocal q
+wrapping and time reversal. The symmetry images span the displacement space;
+the full set of induced potentials is recovered by a Gram-matrix inverse.
+Bare local and nonlocal ionic derivatives are evaluated analytically for every
+target displacement. Matrix elements are contracted directly in the saved
+full-mesh electronic eigenstates, preserving their phases and arbitrary
+degenerate-band rotations without electronic sewing-matrix reconstruction.
+Response k-point reduction is independently available with
+`phonon-dfpt-k-symmetries yes`. Disable
+`phonon-dfpt-symmetries` and `phonon-dfpt-displacement-symmetries` for an explicit
+comparison. Offset-state reuse and symmetry-reduced SCF unfolding remain
+available. MPI q groups own complete q orbits and synchronize their source
 Hamiltonian eigenvectors, including phases and degenerate-subspace rotations,
 and write disjoint target/source blocks of a single `phononHsub` file.
 Storage for this file is `16*(3*Natoms)*Nq^2*Nbands^2` bytes. The former
 `phononEphQ...` and metadata files are no longer produced.
+
+`phonon-dfpt-optimize yes` (default) applies complex local response potentials
+directly, fuses bare and induced local export terms, and contracts nonlocal
+projector derivatives in band space. `no` retains the reference operator path.
+After force contractions, response vectors and source caches are released.
+The exporter then caches real-space source wavefunctions with a per-rank limit
+of `phonon-dfpt-eph-cache-size 512` MiB; zero disables this cache. Source
+projector overlaps are retained separately for the current q orbit.
+`phonon-dfpt-eph-reciprocity yes` (default) evaluates one unordered k pair and
+writes its Hermitian partner when q and -q belong to the same owned orbit.
+Otherwise, full contractions are used. These settings preserve the file layout,
+normalization, double precision, and complete nonlocal derivatives.
+
+For scalar GPU local-potential applications, reusable batched cuFFT plans and
+shared scratch storage replace per-band transforms. Set the environment
+variable `JDFTX_FFT_BATCH_SIZE` to a maximum batch size (default 32, maximum 256).
+Zero selects the original per-band operator; cached export still uses a
+single-band scratch transform. FFT grids, scatter/gather bases and
+normalization are unchanged. Potential reconstruction and displacement mixing
+stay on the GPU, and matrices are reduced to the group head in one batch per
+displacement. Allocation-pool reports at phase boundaries distinguish live
+blocks from cached blocks and count underlying allocations. Pool bytes are
+allocation capacities, not total GPU-driver memory usage. Q-group balancing
+also includes a modest estimate for the export orbit size.
 
 In a Wannier input with the same cell, ions, pseudopotentials, cutoff, bands,
 electronic mesh and `symmetries none`, set, for example:
@@ -277,6 +313,12 @@ SCF finite differences, complex target/source reciprocity, and an actual
 Wannier export. The periodic test also compares all complex matrices with an
 independent native frozen-phonon calculation. MPI testing verifies complex
 reciprocity across q groups and compares the resulting Wannier couplings.
+
+`dfptElectronPhononSymmetry` and its MPI variant compare complex exported
+operators with explicit responses on a nonsymmorphic silicon q grid.
+The Nb variants compare all complete stored band manifolds after aligning
+the exported eigenstate gauges; the rotations test covers Cartesian mixing
+in hexagonal BN. All tests also check complex reciprocity and force matrices.
 
 Polar crystals require special care: the Gamma calculation uses zero macroscopic
 electric field. This implementation does not compute Born effective charges or

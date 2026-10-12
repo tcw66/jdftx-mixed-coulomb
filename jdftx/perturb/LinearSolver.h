@@ -41,6 +41,7 @@ struct SolverParams
 	double residualDiffThreshold;
 	bool CGBypass;
 	bool recomputeResidual;
+	bool logIterations = true; //!< Print successful iteration progress; failure messages are always retained
 	
 	//! Set the default values
 	SolverParams() 
@@ -96,7 +97,7 @@ template<typename Vector> int LinearSolvableIndefinite<Vector>::solve(const Vect
 }
 
 template<typename Vector> int LinearSolvableIndefinite<Vector>::CG(const Vector& b, const SolverParams& p)
-{	fprintf(p.fpLog, "\nBeginning conjugate gradient minimization.\n");
+{	if(p.logIterations) fprintf(p.fpLog, "\nBeginning conjugate gradient minimization.\n");
 	
 	//Initialize:
 	Vector r; hessian(r, state); axpy(1.0, b, r); r *= -1.0; //residual r = -(A.state + b);
@@ -117,8 +118,8 @@ template<typename Vector> int LinearSolvableIndefinite<Vector>::CG(const Vector&
 	//Check initial residual
 	double relErr = rKr ? sqrt(fabs(rdotz)/fabs(rKr)) : sqrt(fabs(rdotz));
 	double relErrPrev = relErr;
-	fprintf(p.fpLog, "%sInitial:  ||r||_k/||b||_k: %12.6le\n", p.linePrefix, relErr); fflush(p.fpLog);
-	if(relErr<p.residualTol) { fprintf(p.fpLog, "%sConverged ||r||_k/||b||_k<%le\n", p.linePrefix, p.residualTol); fflush(p.fpLog); return 0; }
+	if(p.logIterations) { fprintf(p.fpLog, "%sInitial:  ||r||_k/||b||_k: %12.6le\n", p.linePrefix, relErr); fflush(p.fpLog); }
+	if(relErr<p.residualTol) { if(p.logIterations) { fprintf(p.fpLog, "%sConverged ||r||_k/||b||_k<%le\n", p.linePrefix, p.residualTol); fflush(p.fpLog); } return 0; }
 
 	//Main loop:
 	int iter;
@@ -137,7 +138,7 @@ template<typename Vector> int LinearSolvableIndefinite<Vector>::CG(const Vector&
 		
 		if (iter > 1 && iter % 10 == 0 && p.recomputeResidual) {
 			hessian(r, state); axpy(1.0, b, r); r *= -1.0;
-			fprintf(p.fpLog, "Recomputing residual.\n");
+			if(p.logIterations) fprintf(p.fpLog, "Recomputing residual.\n");
 		}
 		
 		z = clone(r);
@@ -148,11 +149,13 @@ template<typename Vector> int LinearSolvableIndefinite<Vector>::CG(const Vector&
 		//Print info:
 		double relErr = sqrt(fabs(rdotz)/fabs(rKr));
 		//double relErr = sqrt(fabs(sync(dot(z,z)))/fabs(rKr));
-		fprintf(p.fpLog, "%sIter: %3d  ||r||_k/||b||_k: %12.6le  alpha: %12.6le  beta: %13.6le  t[s]: %9.2lf\n",
-			p.linePrefix, iter, relErr, alpha, beta, clock_sec()); fflush(p.fpLog);
+		if(p.logIterations) {
+			fprintf(p.fpLog, "%sIter: %3d  ||r||_k/||b||_k: %12.6le  alpha: %12.6le  beta: %13.6le  t[s]: %9.2lf\n",
+				p.linePrefix, iter, relErr, alpha, beta, clock_sec()); fflush(p.fpLog);
+		}
 
 		//Check convergence:
-		if(relErr<p.residualTol) { fprintf(p.fpLog, "%sConverged ||r||_k/||b||_k<%le\n", p.linePrefix, p.residualTol); fflush(p.fpLog); return iter; }
+		if(relErr<p.residualTol) { if(p.logIterations) { fprintf(p.fpLog, "%sConverged ||r||_k/||b||_k<%le\n", p.linePrefix, p.residualTol); fflush(p.fpLog); } return iter; }
 		
 		if(relErr > relErrPrev) {
 			if (consecErrIncreases == 0 && rdotzPrev < optresidual) {
@@ -181,7 +184,7 @@ template<typename Vector> int LinearSolvableIndefinite<Vector>::CG(const Vector&
 
 
 template<typename Vector> int LinearSolvableIndefinite<Vector>::MINRES(const Vector& b, const SolverParams& p)
-{	fprintf(p.fpLog, "\nBeginning MINRES solve.\n");
+{	if(p.logIterations) fprintf(p.fpLog, "\nBeginning MINRES solve.\n");
 	Vector r = clone(state);
 	
 	Ksqrt(r); hessian(r, r); r *= -1.0; axpy(-1.0, b, r); Ksqrt(r); //r = -Ksqrt.b - Ksqrt.A.Ksqrt.x
@@ -230,9 +233,11 @@ template<typename Vector> int LinearSolvableIndefinite<Vector>::MINRES(const Vec
 		rho=s*rho;
 		
 		double relErr = rho/sqrt(fabs(rKr));
-		fprintf(p.fpLog, "%sIter: %3d  ||r||_k/||b||_k: %12.6le t[s]: %9.2lf\n",
-			p.linePrefix, iter, relErr, clock_sec()); fflush(p.fpLog);
-		if (relErr < p.residualTol) { fprintf(p.fpLog, "%sConverged ||r||_k/||b||_k<%le\n", p.linePrefix, p.residualTol); fflush(p.fpLog); Ksqrt(state); return iter; }
+		if(p.logIterations) {
+			fprintf(p.fpLog, "%sIter: %3d  ||r||_k/||b||_k: %12.6le t[s]: %9.2lf\n",
+				p.linePrefix, iter, relErr, clock_sec()); fflush(p.fpLog);
+		}
+		if (relErr < p.residualTol) { if(p.logIterations) { fprintf(p.fpLog, "%sConverged ||r||_k/||b||_k<%le\n", p.linePrefix, p.residualTol); fflush(p.fpLog); } Ksqrt(state); return iter; }
 		
 		if((relErrPrev - relErr)/relErr < p.residualDiffThreshold)
 			consecErrIncreases++;

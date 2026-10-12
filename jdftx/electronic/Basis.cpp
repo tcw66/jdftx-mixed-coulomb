@@ -19,6 +19,8 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 -------------------------------------------------------------------*/
 
 #include <electronic/Everything.h>
+#include <electronic/SpeciesInfo.h>
+#include <atomic>
 #include <cstdio>
 #include <cmath>
 
@@ -26,17 +28,27 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include <core/GpuUtil.h>
 #endif
 
-Basis::Basis()
-{	gInfo = 0;
-	nbasis = 0;
+namespace {
+size_t nextBasisGeneration()
+{ static std::atomic<size_t> counter(0); return counter.fetch_add(1,std::memory_order_relaxed)+1; }
 }
 
-Basis::Basis(const Basis& basis)
+Basis::Basis()
+{	gInfo = 0;
+	iInfo = 0;
+	nbasis = 0;
+	cacheGeneration=nextBasisGeneration();
+}
+
+Basis::Basis(const Basis& basis) : Basis()
 {	*this = basis;
 }
 
 Basis& Basis::operator=(const Basis& basis)
-{	gInfo = basis.gInfo;
+{	if(this==&basis) return *this;
+	if(basis.iInfo) for(const auto& species:basis.iInfo->species) species->clearProjectorCache(this);
+	cacheGeneration=nextBasisGeneration();
+	gInfo = basis.gInfo;
 	iInfo = basis.iInfo;
 	nbasis = basis.nbasis;
 	iGarr = basis.iGarr;
@@ -89,6 +101,10 @@ void Basis::setup(const GridInfo& gInfo, const IonInfo& iInfo, const std::vector
 void Basis::setup(const GridInfo& gInfo, const IonInfo& iInfo,
 	const std::vector<int>& indexVec, const std::vector< vector3<int> >& iGvec)
 {
+	// Invalidate ordinary projectors before reusing basis storage. This common
+	// implementation covers both cutoff-generated and custom-index setups.
+	for(const auto& species:iInfo.species) species->clearProjectorCache(this);
+	cacheGeneration=nextBasisGeneration();
 	this->gInfo = &gInfo;
 	this->iInfo = &iInfo;
 	

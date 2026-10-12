@@ -19,6 +19,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 
 #include <electronic/Everything.h>
 #include <electronic/ColumnBundle.h>
+#include <electronic/ColumnBundleFFT.h>
 #include <core/matrix.h>
 #include <core/vector3.h>
 #include <core/Random.h>
@@ -32,6 +33,7 @@ void ColumnBundle::init(int nc, size_t len, const Basis *b, const QuantumNumber*
 	ncols = nc;
 	col_length = len;
 	basis = b;
+	if(q!=qnumOwner.get()) qnumOwner.reset();
 	qnum = q;
 
 	if(nCols() == 0) { memFree(); return; } //must be default constructor or assignment to empty ColumnBundle
@@ -44,7 +46,26 @@ void ColumnBundle::free()
 	col_length = 0;
 	basis = 0;
 	qnum = 0;
+	qnumOwner.reset();
 	memFree();
+}
+
+void ColumnBundle::ownQuantumNumber()
+{
+	if(qnum && qnum!=qnumOwner.get()) ownQuantumNumber(*qnum);
+}
+
+void ColumnBundle::ownQuantumNumber(const QuantumNumber& quantumNumber)
+{
+	qnumOwner=std::make_shared<QuantumNumber>(quantumNumber);
+	qnum=qnumOwner.get();
+}
+
+void ColumnBundle::shareQuantumNumber(const ColumnBundle& source)
+{
+	if(this==&source) return;
+	qnum=source.qnum;
+	qnumOwner=source.qnum==source.qnumOwner.get() ? source.qnumOwner : nullptr;
 }
 
 // (Default) Constructor
@@ -54,33 +75,41 @@ ColumnBundle::ColumnBundle(int nc, size_t len, const Basis *b, const QuantumNumb
 // Copy constructor
 ColumnBundle::ColumnBundle(const ColumnBundle &Y)
 {	init(Y.nCols(), Y.colLength(), Y.basis, Y.qnum, Y.isOnGpu()); //initialize size and storage
+	shareQuantumNumber(Y);
 	if(nData()) memcpy((ManagedMemory&)*this, (const ManagedMemory&)Y); //copy data
 }
 // Move constructor
-ColumnBundle::ColumnBundle(ColumnBundle&& Y)
+ColumnBundle::ColumnBundle(ColumnBundle&& Y) : ncols(0), col_length(0), qnum(0), basis(0)
 {	std::swap(ncols, Y.ncols);
 	std::swap(col_length, Y.col_length);
 	std::swap(qnum, Y.qnum);
+	qnumOwner.swap(Y.qnumOwner);
 	std::swap(basis, Y.basis);
 	memMove((ManagedMemory&&)Y); //cannibalize Y's data
 }
 // Create a similar object, without copying data
 ColumnBundle ColumnBundle::similar(int ncOverride) const
-{	return ColumnBundle(ncOverride<0 ? ncols : ncOverride, col_length, basis, qnum, isOnGpu());
+{	ColumnBundle result(ncOverride<0 ? ncols : ncOverride,col_length,basis,qnum,isOnGpu());
+	result.shareQuantumNumber(*this);
+	return result;
 }
 
 
 // Copy-assignment
 ColumnBundle& ColumnBundle::operator=(const ColumnBundle &Y)
-{	init(Y.nCols(), Y.colLength(), Y.basis, Y.qnum, Y.isOnGpu()); //initialize size and storage
+{	if(this==&Y) return *this;
+	init(Y.nCols(), Y.colLength(), Y.basis, Y.qnum, Y.isOnGpu()); //initialize size and storage
+	shareQuantumNumber(Y);
 	if(nData()) memcpy((ManagedMemory&)*this, (const ManagedMemory&)Y); //copy data
 	return *this;
 }
 // Move-assignment
 ColumnBundle& ColumnBundle::operator=(ColumnBundle&& Y)
-{	std::swap(ncols, Y.ncols);
+{	if(this==&Y) return *this;
+	std::swap(ncols, Y.ncols);
 	std::swap(col_length, Y.col_length);
 	std::swap(qnum, Y.qnum);
+	qnumOwner.swap(Y.qnumOwner);
 	std::swap(basis, Y.basis);
 	memMove((ManagedMemory&&)Y); //cannibalize Y's data
 	return *this;
@@ -114,6 +143,36 @@ void ColumnBundle::setSub(int colStart, const ColumnBundle& Y)
 	assert(colLength()==Y.colLength());
 	int nColsSub = std::min(Y.nCols(), nCols()-colStart);
 	callPref(eblas_copy)(dataPref()+colStart*colLength(), Y.dataPref(), nColsSub*colLength());
+}
+
+void ColumnBundle::copyColumnFrom(int destination, const ColumnBundle& source, int sourceColumn)
+{
+	assert(colLength()==source.colLength() && destination>=0 && destination<nCols()
+		&& sourceColumn>=0 && sourceColumn<source.nCols());
+	callPref(eblas_copy)(dataPref()+destination*colLength(),source.dataPref()+sourceColumn*colLength(),colLength());
+}
+
+void ColumnBundle::scaleColumns(const diagMatrix& scales)
+{
+	assert(scales.nRows()==nCols());
+	#ifdef GPU_ENABLED
+	updateColumnBundleGPU(*this,nullptr,scales,1.,0.,true);
+	#else
+	complex* output=dataPref();
+	for(int col=0;col<nCols();col++) callPref(eblas_zscal)(colLength(),scales[col],output+col*colLength(),1);
+	#endif
+}
+
+void ColumnBundle::axpyColumns(double alpha,const ColumnBundle& source,const diagMatrix& scales)
+{
+	assert(colLength()==source.colLength() && nCols()==source.nCols() && scales.nRows()==nCols());
+	#ifdef GPU_ENABLED
+	updateColumnBundleGPU(*this,&source,scales,1.,alpha,false);
+	#else
+	complex* output=dataPref(); const complex* input=source.dataPref();
+	for(int col=0;col<nCols();col++)
+		callPref(eblas_zaxpy)(colLength(),alpha*scales[col],input+col*colLength(),1,output+col*colLength(),1);
+	#endif
 }
 
 void ColumnBundle::axpySub(int colStart, complex alpha, const ColumnBundle& Y)

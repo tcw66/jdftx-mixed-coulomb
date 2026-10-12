@@ -44,6 +44,7 @@ public:
 	Basis();
 	Basis(const Basis&); //!< copy by reference
 	Basis& operator=(const Basis&); //!< copy by reference
+	size_t generation() const { return cacheGeneration; } //!< changes on construction/setup/assignment, including address reuse
 
 	//! Setup the indices and integer G-vectors within Ecut for kpoint k
 	void setup(const GridInfo& gInfo, const IonInfo& iInfo, double Ecut, const vector3<> k);
@@ -52,6 +53,7 @@ public:
 	void setup(const GridInfo& gInfo, const IonInfo& iInfo, const std::vector<int>& indexVec);
 	
 private:
+	size_t cacheGeneration;
 	void setup(const GridInfo& gInfo, const IonInfo& iInfo,
 		const std::vector<int>& indexVec,
 		const std::vector< vector3<int> >& iGvec); //set the data arrays from vectors

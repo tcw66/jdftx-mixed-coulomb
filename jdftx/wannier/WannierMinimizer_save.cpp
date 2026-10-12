@@ -20,6 +20,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include <wannier/WannierMinimizerFD.h>
 #include <core/ScalarFieldIO.h>
 #include <core/SphericalHarmonics.h>
+#include <fstream>
 
 void WannierMinimizer::saveMLWF()
 {	for(int iSpin: wannier.iSpinArr)
@@ -30,6 +31,7 @@ void WannierMinimizer::saveMLWF()
 
 void WannierMinimizer::saveMLWF(int iSpin)
 {	
+	checkCheckpoint(iSpin);
 	//Load / compute and broadcast initial rotations:
 	initRotations(iSpin);
 	
@@ -38,6 +40,8 @@ void WannierMinimizer::saveMLWF(int iSpin)
 	
 	//Minimize:
 	double Omega = minimize(wannier.minParams);
+	if(wannier.koopmans && !std::isfinite(Omega))
+		die("KI requires finite localized Wannier orbitals. Use a nonzero wannier-minimize knormThreshold or improve the trial orbitals.\n");
 	for(size_t ik=0; ik<kMesh.size(); ik++)
 	{	KmeshEntry& ki = kMesh[ik];
 		//Make U available on all processes:
@@ -70,6 +74,9 @@ void WannierMinimizer::saveMLWF(int iSpin)
 		fwrite(rPinned.data(), sizeof(vector3<>), nCenters, fp); //read back only if used as frozen centers
 		fclose(fp);
 		logPrintf("done.\n"); logFlush();
+		std::ofstream metadata(wannier.getFilename(Wannier::FilenameDump,"mlwfState",&iSpin).c_str());
+		metadata << checkpointState << '\n' << nCenters << '\n';
+		if(!metadata) die("Cannot write Wannier checkpoint state identity.\n");
 	}
 	
 	//Output range of centers that span each band
@@ -179,6 +186,7 @@ void WannierMinimizer::saveMLWF(int iSpin)
 	
 	//Electronic k-mesh outputs:
 	saveMLWF_H(iSpin, phase); //Hamiltonian
+	if(wannier.koopmans) saveMLWF_KI(iSpin, phase);
 	if(wannier.saveMomenta) saveMLWF_P(iSpin, phase); //Momenta
 	if(wannier.saveSpin) saveMLWF_S(iSpin, phase); //Spins
 	if(wannier.saveR or wannier.saveRP) saveMLWF_RP(iSpin, phase); //R and/or R*P matrix elements

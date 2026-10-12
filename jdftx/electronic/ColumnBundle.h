@@ -25,6 +25,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include <core/matrix.h>
 #include <core/scaled.h>
 #include <electronic/Basis.h>
+#include <memory>
 
 class QuantumNumber;
 class ElecInfo;
@@ -38,6 +39,7 @@ class ColumnBundle : public ManagedMemory<complex>
 {
 	int ncols;
 	size_t col_length; //typically equal to either basis->nbasis (or 2*basis->nbasis for spinors in noncollinear mode)
+	std::shared_ptr<const QuantumNumber> qnumOwner; //empty for borrowed ground-state metadata
 
 public:
 	int nCols() const { return ncols; } //!< number of columns accessor
@@ -52,6 +54,11 @@ public:
 	
 	const QuantumNumber *qnum;
 	const Basis *basis;
+	//! Retain a copy of quantum-number metadata for temporaries and derived bundles.
+	void ownQuantumNumber();
+	void ownQuantumNumber(const QuantumNumber& quantumNumber);
+	//! Preserve optional metadata ownership when constructing a differently shaped bundle.
+	void shareQuantumNumber(const ColumnBundle& source);
 
 	void init(int nc, size_t len, const Basis* b, const QuantumNumber* q, bool onGpu=false); //!< constructor helper
 	void free(); //!< Force cleanup
@@ -69,6 +76,9 @@ public:
 	// Get/set columns
 	ColumnBundle getSub(int colStart, int colStop) const; //!< get a range of columns as a ColumnBundle 
 	void setSub(int colStart, const ColumnBundle&); //!< set columns (starting at colStart) from a ColumnBundle, ignoring columns that would go beyond nCols()
+	void copyColumnFrom(int destination, const ColumnBundle& source, int sourceColumn);
+	void scaleColumns(const diagMatrix& scales);
+	void axpyColumns(double alpha, const ColumnBundle& source, const diagMatrix& scales);
 	void axpySub(int colStart, complex alpha, const ColumnBundle&); //!< accumulate columns (starting at colStart) from a ColumnBundle with scale alpha
 	
 	complexScalarFieldTilde getColumn(int i, int s) const; //!< Expand the i'th column and s'th spinor component from reduced to full G-space
@@ -146,6 +156,9 @@ vector3<matrix> spinOverlap(const scaled<ColumnBundle> &sY); //!< spin-resolved 
 //! If Cout is specified, return output at the k-point and basis of Cout, else use k-point and basis of C.
 ColumnBundle Idag_DiagV_I(const ColumnBundle& C, const ScalarFieldArray& V, const ColumnBundle* Cout = 0);
 ColumnBundle Idag_DiagV_I(const ColumnBundle& C, const complexScalarFieldArray& V, const ColumnBundle* Cout = 0); //!< Same as above for complex potentials
+ManagedArray<complex> realSpaceColumns(const ColumnBundle& C); //!< Cached unnormalized inverse FFTs of scalar columns
+ColumnBundle Idag_DiagV_I_cached(const ColumnBundle& C,const complexScalarFieldArray& V,
+	const ManagedArray<complex>& realSpace,const ColumnBundle& Cout);
 
 ColumnBundle L(const ColumnBundle &Y); //!< Apply Laplacian
 ColumnBundle Linv(const ColumnBundle &Y); //!< Apply Laplacian inverse

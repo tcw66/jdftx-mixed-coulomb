@@ -664,3 +664,177 @@ struct CommandDefectSupercell : public Command
 	}
 }
 commandDefectSupercell;
+
+struct CommandWannierKoopmans : public Command
+{
+	CommandWannierKoopmans() : Command("wannier-koopmans", "wannier")
+	{
+		format = "[<epsilonInfinity>=0] [<nIterations>=300] [<residualTol>=1e-7] [<reduceSymmetry>=yes] [<symmetryTol>=1e-6] [<occupiedResponse>=yes] [<qGroups>=1] [<optimizeResponse>=yes]";
+		comments =
+			"Compute the one-shot second-order KI spectral Hamiltonian after localization,\n"
+			"using primitive-cell finite-q DFPT screening (Colonna et al., JCTC 18, 5435, 2022).\n"
+			"Write mlwfHki, mlwfKI, koopmansScreening and koopmansBands in addition to mlwfH.\n"
+			"Requires a nonmagnetic insulator, norm-conserving nonrelativistic potentials,\n"
+			"with single-spin orbital charge and magnetic response enabled by default.\n"
+			"an analytic LDA/GGA kernel and a Gamma-centered uniform mesh. SCF symmetry\n"
+			"reduction is supported; orbital screening reconstructs the full mesh.\n"
+			"Screening reuses verified symmetry-equivalent orbital-q pairs by default.\n"
+			"reduceSymmetry=no computes every response; symmetryTol controls the relative\n"
+			"orbital-density mismatch permitted for reuse. Bare Hamiltonians use all q points.\n"
+			"occupiedResponse=yes solves only occupied-state response columns for both\n"
+			"valence and conduction perturbations, retaining the full plane-wave response\n"
+			"space. Set it to no to compare with the full stored-band response arrays.\n"
+			"qGroups splits MPI ranks into independent q-response groups (default 1).\n"
+			"Each group retains k-point parallelism. Symmetry-related q points stay\n"
+			"together to preserve verified response reuse. The group count cannot\n"
+			"exceed the MPI rank count, and is capped by the number of q stars.\n"
+			"optimizeResponse=yes reuses the frozen XC kernel across orbital and q\n"
+			"responses, applies complex potentials in one FFT pass and reuses GGA\n"
+			"density gradients with device-resident differentiation. It also caches\n"
+			"frozen real-space orbitals, batches GPU response reductions and conduction\n"
+			"contractions, and processes q stars consecutively with bounded caches.\n"
+			"Set it to no for the reference operators and original q traversal.\n"
+			"Wannier centers must belong separately to occupied or empty subspaces.\n"
+			"epsilonInfinity=0 uses neutralizing-background electrostatics and requires\n"
+			"q-mesh convergence. A supplied isotropic electronic dielectric constant >=1\n"
+			"enables the point-charge Ewald singularity correction (cubic materials).\n"
+			"This is a spectral postprocessing calculation; the DFT total energy is retained.";
+	}
+	void process(ParamList& pl, Everything& e)
+	{
+		Wannier& w = ((WannierEverything&)e).wannier;
+		w.koopmans = true;
+		pl.get(w.koopmansEpsilon, 0., "epsilonInfinity");
+		pl.get(w.koopmansIterations, 300, "nIterations");
+		pl.get(w.koopmansTolerance, 1e-7, "residualTol");
+		pl.get(w.koopmansReduceSymmetry, true, boolMap, "reduceSymmetry");
+		pl.get(w.koopmansSymmetryTolerance, 1e-6, "symmetryTol");
+		pl.get(w.koopmansOccupiedResponse, true, boolMap, "occupiedResponse");
+		pl.get(w.koopmansQGroups, 1, "qGroups");
+		pl.get(w.koopmansOptimizeResponse, true, boolMap, "optimizeResponse");
+		if(w.koopmansQGroups<1 || w.koopmansQGroups>mpiWorld->nProcesses())
+			throw string("qGroups must be between 1 and the MPI rank count");
+		if(!std::isfinite(w.koopmansEpsilon) || (w.koopmansEpsilon!=0. && w.koopmansEpsilon<1.))
+			throw string("epsilonInfinity must be 0 or a finite value >=1");
+		if(w.koopmansIterations<=0 || !std::isfinite(w.koopmansTolerance) || w.koopmansTolerance<=0.)
+			throw string("nIterations and residualTol must be positive and finite");
+		if(!std::isfinite(w.koopmansSymmetryTolerance) || w.koopmansSymmetryTolerance<=0. || w.koopmansSymmetryTolerance>0.01)
+			throw string("symmetryTol must be finite and in (0, 0.01]");
+	}
+	void printStatus(Everything& e, int)
+	{
+		const Wannier& w = ((WannierEverything&)e).wannier;
+		logPrintf("%.15g %d %.15g %s %.15g %s %d %s", w.koopmansEpsilon, w.koopmansIterations, w.koopmansTolerance,
+			w.koopmansReduceSymmetry ? "yes" : "no", w.koopmansSymmetryTolerance,
+			w.koopmansOccupiedResponse ? "yes" : "no", w.koopmansQGroups, w.koopmansOptimizeResponse ? "yes" : "no");
+	}
+} commandWannierKoopmans;
+
+struct CommandWannierKoopmansSpin : public Command
+{
+	CommandWannierKoopmansSpin() : Command("wannier-koopmans-spin", "wannier")
+	{
+		require("wannier-koopmans");
+		format="[<spinResolved>=yes]";
+		comments="Include charge and magnetization screening of a single spin orbital.\n"
+			"The ground state remains nonmagnetic (spintype no-spin); both spin\n"
+			"channels respond independently through the spin-dependent LDA/GGA XC kernel.\n"
+			"Enabled by default. Set no to reproduce legacy charge-only KI screening.";
+	}
+	void process(ParamList& pl, Everything& e)
+	{ pl.get(((WannierEverything&)e).wannier.koopmansSpinResponse,true,boolMap,"spinResolved"); }
+	void printStatus(Everything& e,int)
+	{ logPrintf("%s",((WannierEverything&)e).wannier.koopmansSpinResponse ? "yes" : "no"); }
+} commandWannierKoopmansSpin;
+
+struct CommandWannierKoopmansVerbose : public Command
+{
+	CommandWannierKoopmansVerbose() : Command("wannier-koopmans-verbose", "wannier")
+	{
+		require("wannier-koopmans");
+		format="[<verbose>=no]";
+		comments="Print detailed KI k-point/basis listings, symmetry-reuse messages\n"
+			"and individual coupled/nested response iterations. Default no keeps\n"
+			"independent-pair progress, final residuals, screening summaries and\n"
+			"warnings/errors. This controls both terminal and native log output.";
+	}
+	void process(ParamList& pl,Everything& e)
+	{ pl.get(((WannierEverything&)e).wannier.koopmansVerbose,false,boolMap,"verbose"); }
+	void printStatus(Everything& e,int)
+	{ logPrintf("%s",((WannierEverything&)e).wannier.koopmansVerbose ? "yes" : "no"); }
+} commandWannierKoopmansVerbose;
+
+struct CommandWannierKoopmansScreeningMesh : public Command
+{
+	CommandWannierKoopmansScreeningMesh() : Command("wannier-koopmans-screening-mesh", "wannier")
+	{
+		require("wannier-koopmans");
+		format="<nq0> <nq1> <nq2>";
+		comments="Optional Gamma-centered q mesh for the screening coefficients alpha.\n"
+			"Each positive dimension must divide the corresponding kpoint-folding.\n"
+			"The occupied-state k integration, orbital sources, bare KI Hamiltonian\n"
+			"and output bands retain the full Wannier mesh. Only the q quadrature\n"
+			"in the bare/relaxed curvature ratio for alpha uses this coarse mesh.\n"
+			"Omitting this command uses the full mesh. Converge alpha and the gap\n"
+			"against that result before using a coarser screening mesh.";
+	}
+	void process(ParamList& pl,Everything& e)
+	{
+		auto& mesh=((WannierEverything&)e).wannier.koopmansScreeningMesh;
+		for(int d=0;d<3;d++) {
+			pl.get(mesh[d],0,"q mesh dimension",true);
+			if(mesh[d]<=0) throw string("screening mesh dimensions must be positive");
+		}
+	}
+	void printStatus(Everything& e,int)
+	{
+		const auto& mesh=((WannierEverything&)e).wannier.koopmansScreeningMesh;
+		logPrintf("%d %d %d",mesh[0],mesh[1],mesh[2]);
+	}
+} commandWannierKoopmansScreeningMesh;
+
+struct CommandWannierKoopmansResponse : public Command
+{
+	CommandWannierKoopmansResponse() : Command("wannier-koopmans-response", "wannier")
+	{
+		require("wannier-koopmans");
+		format="[<nested>=no] [<independentBandCG>=yes] [<mixFraction>=0.4] [<mixHistory>=8] [<mixIterations>=80] [<orbitalCacheMiB>=2048] [<symmetryCacheMiB>=512] [<contractionCacheMiB>=4096]";
+		comments="Configure KI screening without changing its response tolerance.\n"
+			"nested=yes uses fixed-potential inner solves and outer potential mixing.\n"
+			"independentBandCG=yes uses independently converged band CG in the inner\n"
+			"solves, falling back to MINRES for nonpositive curvature or a nondiagonal\n"
+			"occupied Hamiltonian. The default remains the coupled MINRES solver.\n"
+			"orbitalCacheMiB bounds frozen real-space wavefunctions per MPI rank;\n"
+			"symmetryCacheMiB bounds source densities per group head, and\n"
+			"contractionCacheMiB bounds packed conduction orbitals per rank. Zero\n"
+			"disables the respective cache. Optimized scheduling releases source densities\n"
+			"after each q star. Caches require optimizeResponse=yes; nested screening\n"
+			"also works without these operator optimizations.";
+	}
+	void process(ParamList& pl,Everything& e)
+	{
+		auto& w=((WannierEverything&)e).wannier;
+		pl.get(w.koopmansNestedResponse,false,boolMap,"nested");
+		pl.get(w.koopmansIndependentBandCG,true,boolMap,"independentBandCG");
+		pl.get(w.koopmansMixFraction,0.4,"mixFraction");
+		pl.get(w.koopmansMixHistory,8,"mixHistory");
+		pl.get(w.koopmansMixIterations,80,"mixIterations");
+		pl.get(w.koopmansOrbitalCacheMiB,2048.,"orbitalCacheMiB");
+		pl.get(w.koopmansSymmetryCacheMiB,512.,"symmetryCacheMiB");
+		pl.get(w.koopmansContractionCacheMiB,4096.,"contractionCacheMiB");
+		if(!std::isfinite(w.koopmansMixFraction) || w.koopmansMixFraction<=0. || w.koopmansMixFraction>1.)
+			throw string("mixFraction must be finite and in (0, 1]");
+		if(w.koopmansMixHistory<1 || w.koopmansMixIterations<1) throw string("mixHistory and mixIterations must be positive");
+		if(!std::isfinite(w.koopmansOrbitalCacheMiB) || w.koopmansOrbitalCacheMiB<0.
+			|| !std::isfinite(w.koopmansSymmetryCacheMiB) || w.koopmansSymmetryCacheMiB<0.
+			|| !std::isfinite(w.koopmansContractionCacheMiB) || w.koopmansContractionCacheMiB<0.)
+			throw string("cache budgets must be finite and nonnegative");
+	}
+	void printStatus(Everything& e,int)
+	{
+		const auto& w=((WannierEverything&)e).wannier;
+		logPrintf("%s %s %.15g %d %d %.15g %.15g %.15g",w.koopmansNestedResponse ? "yes" : "no",
+			w.koopmansIndependentBandCG ? "yes" : "no",w.koopmansMixFraction,w.koopmansMixHistory,
+			w.koopmansMixIterations,w.koopmansOrbitalCacheMiB,w.koopmansSymmetryCacheMiB,w.koopmansContractionCacheMiB);
+	}
+} commandWannierKoopmansResponse;

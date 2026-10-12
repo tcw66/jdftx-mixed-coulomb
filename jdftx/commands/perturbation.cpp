@@ -313,7 +313,7 @@ struct CommandPhononDFPTElectronPhonon : public Command
 			"Writes phononHsub and phononKpts, plus matching wfns, eigenvals and fillings.\n"
 			"Requires a Gamma-centered electronic mesh with kpoint-folding divisible by the phonon q grid.\n"
 			"Use wannier phononSupercell with this q grid and wannier-initial-state with the DFPT dump prefix.\n"
-			"This export explicitly solves all q points and displacements, overriding their symmetry reductions.\n"
+			"Q/displacement symmetry reductions reconstruct screened potentials; band contractions retain the full k mesh.\n"
 			"Offset-state reuse, symmetry-reduced SCF restarts and MPI q groups remain available.\n"
 			"To include conduction bands, use Fermi/Gauss smearing and enough elec-n-bands in SCF and DFPT.";
 		require("phonon-dfpt");
@@ -323,6 +323,54 @@ struct CommandPhononDFPTElectronPhonon : public Command
 	void printStatus(Everything& e,int iRep)
 	{ logPrintf("%s",boolMap.getString(e.pertInfo.phononElectronPhonon)); }
 } commandPhononDFPTElectronPhonon;
+
+struct CommandPhononDFPTOptimize : public Command
+{
+	CommandPhononDFPTOptimize() : Command("phonon-dfpt-optimize", "jdftx/Perturb")
+	{
+		format="<yes|no>";
+		comments="Use direct complex response operators and fused electron-phonon export (default yes).\n"
+			"Disable to compare with separate bare/induced reference contractions.";
+		require("phonon-dfpt");
+	}
+	void process(ParamList& pl,Everything& e)
+	{ pl.get(e.pertInfo.phononOptimize,true,boolMap,"optimize phonon operators",true); }
+	void printStatus(Everything& e,int iRep)
+	{ logPrintf("%s",boolMap.getString(e.pertInfo.phononOptimize)); }
+} commandPhononDFPTOptimize;
+
+struct CommandPhononDFPTEphCache : public Command
+{
+	CommandPhononDFPTEphCache() : Command("phonon-dfpt-eph-cache-size", "jdftx/Perturb")
+	{
+		format="<MiB>";
+		comments="Maximum cached real-space export wavefunctions per rank in MiB (default 512).\n"
+			"Zero disables this cache. Storage is released before the next response solve.";
+		require("phonon-dfpt");
+	}
+	void process(ParamList& pl,Everything& e)
+	{
+		pl.get(e.pertInfo.phononEphCacheMiB,512.,"export cache size",true);
+		if(!std::isfinite(e.pertInfo.phononEphCacheMiB) || e.pertInfo.phononEphCacheMiB<0.
+			|| e.pertInfo.phononEphCacheMiB>=double(SIZE_MAX)/(1024.*1024.))
+			throw string("cache size must be finite, nonnegative and fit in the address space");
+	}
+	void printStatus(Everything& e,int iRep) { logPrintf("%g",e.pertInfo.phononEphCacheMiB); }
+} commandPhononDFPTEphCache;
+
+struct CommandPhononDFPTEphReciprocity : public Command
+{
+	CommandPhononDFPTEphReciprocity() : Command("phonon-dfpt-eph-reciprocity", "jdftx/Perturb")
+	{
+		format="<yes|no>";
+		comments="Contract one Hermitian k pair and write its conjugate-transpose partner (default yes).\n"
+			"Requires paired q and -q in the same symmetry orbit; otherwise falls back to full contractions.";
+		require("phonon-dfpt");
+	}
+	void process(ParamList& pl,Everything& e)
+	{ pl.get(e.pertInfo.phononEphReciprocity,true,boolMap,"use export reciprocity",true); }
+	void printStatus(Everything& e,int iRep) { logPrintf("%s",boolMap.getString(e.pertInfo.phononEphReciprocity)); }
+} commandPhononDFPTEphReciprocity;
 
 struct CommandPhononDFPTSymmetries : public Command
 {
@@ -433,7 +481,7 @@ struct CommandPhononDFPTBalanceQGroups : public Command
 	CommandPhononDFPTBalanceQGroups() : Command("phonon-dfpt-balance-q-groups", "jdftx/Perturb")
 	{
 		format="<yes|no>";
-		comments="Balance q groups using displacement counts and offset-state work (default yes).\n"
+		comments="Balance q groups using displacement counts, offset-state work and export orbit sizes (default yes).\n"
 			"Accounts for unequal group sizes and keeps all displacements at a q together.\n"
 			"Set no to assign representatives round-robin.";
 		require("phonon-dfpt");
@@ -452,7 +500,7 @@ struct CommandPhononDFPTKSymmetries : public Command
 		comments="Reduce electronic response k points using the symmetry subgroup of each displacement (default no).\n"
 			"Uses translation-free operations preserving q exactly and the displaced atom, with direction character +/-1.\n"
 			"Symmetrizes response densities and reconstructs wavefunction responses with band sewing matrices.\n"
-			"Unsupported operations and electron-phonon export retain the full electronic mesh.";
+			"Unsupported operations retain the full response mesh; electron-phonon contractions always use full saved states.";
 		require("phonon-dfpt");
 	}
 	void process(ParamList& pl,Everything& e)

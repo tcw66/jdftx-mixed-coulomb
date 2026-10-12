@@ -311,12 +311,16 @@ void PerturbationInfo::setupkpoints(const Everything &e, const ElecInfo &eInfo)
 	kplusq_basis.resize(eInfo.nStates);
 	kminusq_basis.resize(eInfo.nStates);
 
+	FILE* basisLog=globalLog;
+	if(fullMeshResponse && !kiVerbose) logSuspend();
 	for(int q=0; q<eInfo.nStates; q++)
 	{
 		kplusq_basis[q].setup(gInfoBasis, e.iInfo, e.cntrl.Ecut, kplusq_vectors[q].k);
 		kminusq_basis[q].setup(gInfoBasis, e.iInfo, e.cntrl.Ecut, kminusq_vectors[q].k);
 	}
+	globalLog=basisLog;
 
+	if(fullMeshResponse && !kiVerbose) return;
 	logPrintf("Printing k, k+q, and k-q vectors:\n");
 	for(int q=0; q<eInfo.nStates; q++)
 	{
@@ -335,7 +339,8 @@ void PerturbationInfo::initInc(std::vector<ColumnBundle>& Y, int nbundles, int n
 			int kpq = q ;
 			int kmq = q + eInfo->nStates;
 			Y[kpq].init(ncols, kplusq_basis[q].nbasis * eInfo->spinorLength(), &kplusq_basis[q], &kplusq_vectors[q], isGpuEnabled());
-			Y[kmq].init(ncols, kminusq_basis[q].nbasis * eInfo->spinorLength(), &kminusq_basis[q], &kminusq_vectors[q], isGpuEnabled());
+			if(oneSidedResponse) Y[kmq].free();
+			else Y[kmq].init(ncols, kminusq_basis[q].nbasis * eInfo->spinorLength(), &kminusq_basis[q], &kminusq_vectors[q], isGpuEnabled());
 		}
 	}
 }
@@ -350,7 +355,7 @@ void PerturbationInfo::checkSupportedFeatures(const Everything &e, const ElecInf
 			|| (eInfo.smearingType!=ElecInfo::SmearingFermi && eInfo.smearingType!=ElecInfo::SmearingGauss))
 			die("Metallic phonon-dfpt requires Fermi or Gauss smearing with a positive finite width.\n");
 	}
-	else if(!(eInfo.fillingsUpdate==ElecInfo::FillingsConst && eInfo.scalarFillings))
+	else if(!(eInfo.fillingsUpdate==ElecInfo::FillingsConst && (eInfo.scalarFillings || occupiedProjectorSupplied)))
 		die("Constant fillings only.\n");
 	if(e.exCorr.exxFactor())
 		die("Variational perturbation currently does not support exact exchange.\n");
@@ -380,7 +385,7 @@ void PerturbationInfo::checkSupportedFeatures(const Everything &e, const ElecInf
 		
 	if (e.symm.mode != SymmetriesNone)
 	{
-		if (!commensurate)
+		if (!commensurate && !fullMeshResponse)
 			die("Symmetries are not supported with incommensurate perturbations.\n");
 		
 		if (dVext && commensurate) {

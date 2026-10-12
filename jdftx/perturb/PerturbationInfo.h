@@ -105,12 +105,25 @@ public:
 
 	bool commensurate = true; //!< Is the perturbation lattice periodic
 	bool offsetStatesReady = false; //!< Reset when offset bases are allocated
+	bool fullMeshResponse = false; //!< Driver expands all electronic k points; orbital sources must not be crystal-symmetrized
+	bool optimizeFrozenResponse = false; //!< KI driver guarantees frozen density throughout the solver lifetime
+	bool oneSidedResponse = false; //!< Verified nonmagnetic full-mesh response uses time reversal to eliminate the minus branch
+	bool kiSpinResponse = false; //!< Nonmagnetic KI resolves charge and longitudinal magnetization response
+	bool kiVerbose = false; //!< Detailed logging for full-mesh KI; other perturbations keep their usual output
+	bool magneticResponse = false; //!< Active scalar response represents m=n_up-n_down and V_m=(V_up-V_down)/2
+	double frozenOrbitalCacheMiB = 0.; //!< Per-rank real-space occupied-orbital cache budget
+	bool nestedResponse = false; //!< Enable nested screening for the full-mesh orbital driver
+	bool independentBandCG = true; //!< Use band CG, with MINRES fallback, inside nested screening
+	bool occupiedProjectorSupplied = false; //!< Driver supplies occupied-only Cinc projectors with fixed empty source bands
 	bool groundStateReady = false; //!< Ground state has been minimized for the current response sequence
 	vector3<int> phononGrid; //!< Nonzero entries enable primitive-cell DFPT phonons
 	bool phononUseSymmetry = true; //!< Reduce q by space-group symmetry and time reversal
 	bool phononReduceDisplacements = true; //!< Reconstruct displacement responses using the little group of q
 	bool phononReuseOffsetStates = true; //!< Reuse existing occupied states when k +/- q lies on the k mesh
 	bool phononElectronPhonon = false; //!< Export screened Bloch Hamiltonian derivatives at every q and displacement
+	bool phononOptimize = true; //!< Fused phonon operators and bounded export caches (disable for reference comparisons)
+	double phononEphCacheMiB = 512.; //!< Maximum cached real-space export wavefunctions per rank
+	bool phononEphReciprocity = true; //!< Contract one member of each Hermitian k pair
 	string phononInitialInput, phononInitialState; //!< Input and state pattern of a symmetry-reduced SCF restart
 	int phononQGroups = 1; //!< Independent MPI groups for representative q points
 	bool phononCache = true; //!< Reuse frozen-ground-state and bare perturbation data within each q
@@ -155,6 +168,7 @@ public:
 	std::vector<ColumnBundle> grad, HC, OC;
 	ScalarField sigma_cached, e_nn_cached, e_sigma_cached, e_nsigma_cached, e_sigmasigma_cached; //LDA and GGA second derivs
 	VectorField IDJn_cached;
+	ScalarField spin_e_mm_cached, spin_e_mu_cached, spin_e_uu_cached, spin_e_v_cached;
 	
 	std::vector<matrix> E_nAug_cached, E_nAug_dVsclocpsi, E_nAug_dVscloctau;
 };

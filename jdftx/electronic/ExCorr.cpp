@@ -1033,6 +1033,85 @@ void ExCorr::getSecondDerivatives(const ScalarField& n, ScalarField& e_nn, Scala
 	}
 }
 
+namespace {
+void spinDerivativeDenominators(size_t start, size_t stop, const double* n,
+	const double* sigma, double* nDen, double* sigmaDen, double eps, double nCut)
+{
+	for(size_t i=start;i<stop;i++) {
+		nDen[i]=(n[i]>nCut) ? 1./(4*eps*n[i]) : 0.;
+		if(sigmaDen) sigmaDen[i]=(n[i]>nCut && sigma[i]>0.) ? 1./(4*eps*sigma[i]) : 0.;
+	}
+}
+}
+
+void ExCorr::getSpinSecondDerivatives(const ScalarField& n, const ScalarField& sigma,
+	ScalarField& e_mm, ScalarField& e_mu, ScalarField& e_uu, ScalarField& e_v, double nCut) const
+{
+	bool needsSigma=false, needsTau=false, needsLap=false;
+	for(auto func: functionals->internal) if(!func->hasKinetic()) {
+		needsSigma |= func->needsSigma(); needsTau |= func->needsTau(); needsLap |= func->needsLap();
+	}
+	#ifdef LIBXC_ENABLED
+	for(auto func: functionals->libXC) if(!func->hasKinetic()) {
+		needsSigma |= func->needsSigma(); needsTau |= func->needsTau(); needsLap |= func->needsLap();
+	}
+	#endif
+	if(needsTau || needsLap) die("Spin second derivatives implemented only for LDAs and GGAs.\n");
+	const GridInfo& g=n->gInfo;
+	const double eps=1e-5;
+	// E(n,m,u,v), where u=grad(n).grad(m), v=|grad(m)|^2.
+	// V_m=(V_up-V_down)/2. At m=0 its local term is E_mm*m+E_mu*u.
+	// Vary gradients by (1 +/- eps): their Gram matrix stays positive,
+	// including at points where the ground-state gradient vanishes.
+	struct Config { ScalarFieldArray n, sigma, en, es; Config(): n(2),sigma(3),en(2),es(3) {} };
+	std::vector<Config> c(5);
+	for(int j=0;j<(needsSigma ? 5 : 3);j++) {
+		for(int s=0;s<2;s++) {
+			double dm=(j==1 ? eps : j==2 ? -eps : 0.)*(s ? -1. : 1.);
+			c[j].n[s]=(0.5*(1.+dm))*n;
+		}
+		if(needsSigma) {
+			double du=(j==3 ? eps : j==4 ? -eps : 0.);
+			c[j].sigma[0]=(0.25*pow(1.+du,2))*sigma;
+			c[j].sigma[1]=(0.25*(1.-du*du))*sigma;
+			c[j].sigma[2]=(0.25*pow(1.-du,2))*sigma;
+		}
+		nullToZero(c[j].en,g);
+		if(needsSigma) nullToZero(c[j].es,g);
+		ScalarField energy; nullToZero(energy,g);
+		#ifdef LIBXC_ENABLED
+		if(!functionals->libXC.empty()) {
+			auto nArr=transpose<2>(c[j].n);
+			ManagedArray<double> sigmaArr,enArr,esArr;
+			init_zero(enArr,2*g.nr);
+			if(needsSigma) { sigmaArr=transpose<3>(c[j].sigma); init_zero(esArr,3*g.nr); }
+			for(auto func:functionals->libXC) if(!func->hasKinetic())
+				func->evaluate(2,g.nr,nArr.dataXC(),needsSigma ? sigmaArr.dataXC() : nullptr,nullptr,nullptr,
+					energy->dataXC(),enArr.dataXC(),needsSigma ? esArr.dataXC() : nullptr,nullptr,nullptr);
+			transpose<2>(enArr,c[j].en);
+			if(needsSigma) transpose<3>(esArr,c[j].es);
+		}
+		#endif
+		std::vector<const double*> unused(2,nullptr);
+		std::vector<double*> unusedOut(2,nullptr);
+		for(auto func:functionals->internal) if(!func->hasKinetic())
+			func->evaluate(g.nr,constDataPref(c[j].n),constDataPref(c[j].sigma),unused,unused,
+				energy->dataPref(),dataPref(c[j].en),dataPref(c[j].es),unusedOut,unusedOut);
+	}
+	ScalarField nDen=ScalarFieldData::alloc(g), sigmaDen;
+	if(needsSigma) sigmaDen=ScalarFieldData::alloc(g);
+	threadLaunch(spinDerivativeDenominators,g.nr,n->data(),needsSigma ? sigma->data() : nullptr,
+		nDen->data(),needsSigma ? sigmaDen->data() : nullptr,eps,nCut);
+	e_mm=nDen*(c[1].en[0]-c[1].en[1]-c[2].en[0]+c[2].en[1]);
+	if(needsSigma) {
+		e_mu=nDen*(c[1].es[0]-c[1].es[2]-c[2].es[0]+c[2].es[2]);
+		e_uu=sigmaDen*(c[3].es[0]-c[3].es[2]-c[4].es[0]+c[4].es[2]);
+		ScalarField mask=ScalarFieldData::alloc(g);
+		threadLaunch(setMask,g.nr,n->data(),mask->data(),nCut);
+		e_v=0.25*(c[0].es[0]-c[0].es[1]+c[0].es[2])*mask;
+	} else { e_mu=0; e_uu=0; e_v=0; }
+}
+
 bool ExCorr::needFiniteDifference_dVxc() const
 {	bool needsTau=false, needsLap=false;
 	for(auto func: functionals->internal)

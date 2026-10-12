@@ -149,6 +149,23 @@ void D_gpu(const vector3<int> S, const complex* in, complex* out, vector3<> Ge)
 	gpuErrorCheck();
 }
 
+// Full complex-grid Bloch derivative used by the frozen KI response kernel.
+__global__
+void fullBlochDerivative_kernel(int zBlock, const vector3<int> S, complex* field,
+	vector3<> q, vector3<> Ge)
+{
+	COMPUTE_fullGindices
+	field[i] *= complex(0, dot(iG+q,Ge));
+}
+void fullBlochDerivative_gpu(const vector3<int> S, complex* field,
+	vector3<> q, vector3<> Ge)
+{
+	GpuLaunchConfig3D glc(fullBlochDerivative_kernel,S);
+	for(int zBlock=0; zBlock<glc.zBlockMax; zBlock++)
+		fullBlochDerivative_kernel<<<glc.nBlocks,glc.nPerBlock>>>(zBlock,S,field,q,Ge);
+	gpuErrorCheck();
+}
+
 __global__
 void DD_kernel(int zBlock, const vector3<int> S, const complex* in, complex* out, vector3<> Ge1, vector3<> Ge2)
 {	COMPUTE_halfGindices

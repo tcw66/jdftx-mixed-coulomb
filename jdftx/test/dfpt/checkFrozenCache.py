@@ -134,7 +134,12 @@ def main():
                 assert any(int(pairs) > 0 for retained, hits, builds, pairs, storage in rows)
             else:
                 if not (reduced and args.species == 'Nb'):
-                    assert any(int(hits) > 0 for retained, hits, builds, pairs, storage in rows)
+                    # Displacement reconstruction contracts the retained
+                    # sources directly and need not perform another lookup.
+                    if name == 'combined':
+                        assert any(int(retained) > 0 for retained, hits, builds, pairs, storage in rows)
+                    else:
+                        assert any(int(hits) > 0 for retained, hits, builds, pairs, storage in rows)
                 assert any(int(pairs) > 0 for retained, hits, builds, pairs, storage in rows)
                 assert all(float(storage) <= budget for retained, hits, builds, pairs, storage in rows)
             if args.species == 'Nb':

@@ -169,9 +169,9 @@ namespace MemCache
 	public:
 		void free(void* ptr)
 		{	if(not MemSpace::shouldCache) {	MemSpace::free(ptr); return; }
-			nFrees++;
 			//Move ptr from allocated to cache (for future allocs)
 			lock.lock();
+			nFrees++;
 			auto iter = allocated.find(ptr);
 			assert(iter != allocated.end());
 			size_t size = iter->second;
@@ -184,8 +184,8 @@ namespace MemCache
 		
 		void* alloc(size_t size, bool onGpu)
 		{	if(not MemSpace::shouldCache) return MemSpace::alloc(size, onGpu);
-			nAllocs++;
 			lock.lock();
+			nAllocs++;
 			//Search cache for suitable allocations first:
 			{	auto iter = cache.lower_bound(size); //smallest allocation >= required
 				if(iter != cache.end())
@@ -247,6 +247,14 @@ namespace MemCache
 			nFreesRaw = 0;
 		}
 		
+		void reportState(const char* space,const char* phase)
+		{
+			if(!MemSpace::shouldCache) return;
+			std::lock_guard<std::mutex> guard(lock);
+			logPrintf("Allocation pool %s (%s): live %.3f MiB, cached %.3f MiB, reserved %.3f MiB; raw allocations %zu/%zu, raw frees %zu/%zu.\n",
+				space,phase,allocatedTot/(1024.*1024.),cacheTot/(1024.*1024.),overallTot/(1024.*1024.),
+				nAllocsRaw,nAllocs,nFreesRaw,nFrees);
+		}
 		~MemCache()
 		{	for(auto entry: allocated) MemSpace::free(entry.first);
 			for(auto entry: cache) MemSpace::free(entry.second);
@@ -359,6 +367,18 @@ namespace MemCache
 
 void ManagedMemoryBase::reportUsage()
 {	MemUsageReport::manager(MemUsageReport::Print);
+}
+
+void ManagedMemoryBase::reportAllocationCache(const char* phase)
+{
+	#ifdef CUDA_MANAGED_MEMORY
+	MemCache::CPU().reportState("unified",phase);
+	#else
+	MemCache::CPU().reportState("host",phase);
+	#ifdef GPU_ENABLED
+	MemCache::GPU().reportState("device",phase);
+	#endif
+	#endif
 }
 
 //Free memory

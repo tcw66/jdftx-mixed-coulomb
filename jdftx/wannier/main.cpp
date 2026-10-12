@@ -33,6 +33,8 @@ int main(int argc, char** argv)
 	//Parse input file:
 	WannierEverything e;
 	parse(readInputFile(ip.inputFilename), e, ip.printDefaults);
+	if(e.wannier.koopmans && e.eVars.fluidParams.fluidType!=FluidNone)
+		die("wannier-koopmans does not support fluid screening.\n");
 	
 	//Set initial filenames and prevent unnecessary setup below:
 	e.eVars.wfnsFilename = e.wannier.getFilename(Wannier::FilenameInit, "wfns");

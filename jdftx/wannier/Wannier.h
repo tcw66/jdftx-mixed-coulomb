@@ -80,6 +80,22 @@ public:
 	bool saveSpin; //!< whether to output spin matrix elements (non-collinear only)
 	bool saveR; //!< whether to output position matrix elements R (short-range Wannier-rotation-matched part)
 	bool saveRP; //!< whether to output R*P matrix elements for Wannierized angular momentum / electric quadrupole evaluation
+	bool koopmans = false; //!< one-shot second-order KI spectral Hamiltonian
+	bool koopmansSpinResponse = true; //!< Screen a single spin orbital, including magnetization response
+	bool koopmansVerbose = false; //!< Print per-k-point, per-pair and solver-iteration details
+	vector3<int> koopmansScreeningMesh = vector3<int>(0,0,0); //!< Optional coarse q mesh for alpha; zero uses the full Wannier mesh
+	double koopmansEpsilon = 0.; //!< isotropic epsilon infinity for Ewald correction; zero disables correction
+	int koopmansIterations = 300;
+	double koopmansTolerance = 1e-7;
+	bool koopmansReduceSymmetry = true; //!< Reuse screening scalars for verified orbital-density symmetries
+	double koopmansSymmetryTolerance = 1e-6; //!< Maximum relative orbital-density mismatch for response reuse
+	bool koopmansOccupiedResponse = true; //!< Restrict response source columns to occupied states, keeping the full plane-wave complement
+	int koopmansQGroups = 1; //!< Independent MPI response groups, with k parallelism within each group
+	bool koopmansOptimizeResponse = true; //!< Reuse frozen XC kernels/GGA gradients and apply complex potentials directly
+	bool koopmansNestedResponse = false, koopmansIndependentBandCG = true;
+	double koopmansMixFraction = 0.4, koopmansOrbitalCacheMiB = 2048., koopmansSymmetryCacheMiB = 512.;
+	double koopmansContractionCacheMiB = 4096.; //!< Bound packed conduction orbitals per rank
+	int koopmansMixHistory = 8, koopmansMixIterations = 80;
 	
 	string zVfilename; //!< filename for reading Vscloc with an applied electric field for z matrix element output
 	double zFieldMag; //!< magnitude of electric field difference (Eh/a0) between current calculation and the specified Vscloc

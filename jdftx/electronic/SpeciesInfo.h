@@ -93,6 +93,13 @@ public:
 	//! If derivDir is non-null, return the derivative with respct to Cartesian k direction *derivDir instead (never cached).
 	//! If stressDir is >=0, then calculate (i,j) component of dVnl/dR . RT where stressDir = 3*i+j
 	std::shared_ptr<ColumnBundle> getV(const ColumnBundle& Cq, const vector3<>* derivDir=0, const int stressDir=-1) const;
+	//! Clear retained projectors before rebuilding/destroying a basis (null clears all bases).
+	void clearProjectorCache(const Basis* basis=0);
+	//! Limit retained projector values per species; zero disables retention. Native default is unlimited.
+	//! Changing the limit clears existing entries; callers may save/restore projectorCacheLimit().
+	void setProjectorCacheLimit(size_t bytes);
+	size_t projectorCacheLimit() const { return cachedVLimit; }
+	size_t projectorCacheBytes() const { return cachedVBytes; }
 	ColumnBundle getVatom(const ColumnBundle& Cq, int atom) const; //!< Single atom version
 	int nProjectors() const { return MnlAll.nRows() * atpos.size(); } //!< total number of projectors for all atoms in this species (number of columns in result of getV)
 	
@@ -194,7 +201,18 @@ private:
 	std::vector<matrix> Qint; //!< overlap augmentation matrix (indexed by l, empty if no augmentation)
 	matrix QintAll; //!< block matrix containing Qint for all l,m 
 	
-	std::map<std::pair<vector3<>,const Basis*>, std::shared_ptr<ColumnBundle> > cachedV; //cached projectors (identified by k-point and basis pointer)
+	struct CachedProjectors
+	{
+		vector3<> k;
+		size_t basisGeneration;
+		std::shared_ptr<ColumnBundle> values;
+		size_t lastUsed;
+	};
+	// Retain only the latest k at each basis address. Finite limits evict least-recently-used entries.
+	// Basis generation also protects against assignment and reuse of a destroyed basis address.
+	mutable std::map<const Basis*,CachedProjectors> cachedV;
+	mutable size_t cachedVBytes=0, cachedVClock=0;
+	size_t cachedVLimit=size_t(-1);
 	
 	struct QijIndex
 	{	int l1, p1; //!< Angular momentum and projector index for channel i

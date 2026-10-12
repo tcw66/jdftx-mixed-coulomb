@@ -322,20 +322,49 @@ void SpeciesInfo::accumNonlocalForces(const ColumnBundle& Cq, const matrix& Vdag
 	}
 }
 
+void SpeciesInfo::clearProjectorCache(const Basis* basis)
+{
+	if(!basis) { cachedV.clear(); cachedVBytes=0; cachedVClock=0; return; }
+	auto found=cachedV.find(basis);
+	if(found!=cachedV.end()) {
+		cachedVBytes-=found->second.values->nData()*sizeof(complex);
+		cachedV.erase(found);
+	}
+}
+
+void SpeciesInfo::setProjectorCacheLimit(size_t bytes)
+{
+	if(bytes==cachedVLimit) return;
+	clearProjectorCache(); cachedVLimit=bytes;
+}
+
 std::shared_ptr<ColumnBundle> SpeciesInfo::getV(const ColumnBundle& Cq, const vector3<>* derivDir, const int stressDir) const
 {	const QuantumNumber& qnum = *(Cq.qnum);
 	const Basis& basis = *(Cq.basis);
-	std::pair<vector3<>,const Basis*> cacheKey = std::make_pair(qnum.k, &basis);
 	int nProj = MnlAll.nRows() / e->eInfo.spinorLength();
 	if(!nProj) return 0; //purely local psp
+	const bool shouldCache=e->cntrl.cacheProjectors && !derivDir && stressDir<0 && cachedVLimit;
 	//First check cache
-	if(e->cntrl.cacheProjectors && (!derivDir) && (!stressDir))
-	{	auto iter = cachedV.find(cacheKey);
-		if(iter != cachedV.end()) //found
-			return iter->second; //return cached value
+	if(shouldCache)
+	{	auto iter = cachedV.find(&basis);
+		if(iter != cachedV.end()) {
+			if(iter->second.k==qnum.k && iter->second.basisGeneration==basis.generation()
+				&& iter->second.values->colLength()==basis.nbasis) {
+				iter->second.lastUsed=++cachedVClock;
+				const QuantumNumber& previous=*iter->second.values->qnum;
+				if(previous.spin!=qnum.spin || previous.weight!=qnum.weight)
+					iter->second.values->ownQuantumNumber(qnum);
+				return iter->second.values;
+			}
+			// Offset bases are reused across q points. Never retain every prior k
+			// at one basis address, which would grow quadratically with the mesh.
+			cachedVBytes-=iter->second.values->nData()*sizeof(complex);
+			cachedV.erase(iter);
+		}
 	}
 	//No cache / not found in cache; compute:
-	std::shared_ptr<ColumnBundle> V = std::make_shared<ColumnBundle>(nProj*atpos.size(), basis.nbasis, &basis, &qnum, isGpuEnabled()); //not a spinor regardless of spin type
+	std::shared_ptr<ColumnBundle> V = std::make_shared<ColumnBundle>(nProj*atpos.size(),basis.nbasis,&basis,&qnum,isGpuEnabled()); //not a spinor regardless of spin type
+	V->ownQuantumNumber(); // slices/copies preserve this ownership after cache eviction
 	int iProj = 0;
 	for(int l=0; l<int(VnlRadial.size()); l++)
 		for(unsigned p=0; p<VnlRadial[l].size(); p++)
@@ -347,8 +376,17 @@ std::shared_ptr<ColumnBundle> SpeciesInfo::getV(const ColumnBundle& Cq, const ve
 				iProj++;
 			}
 	//Add to cache if necessary:
-	if(e->cntrl.cacheProjectors && (!derivDir) && (!stressDir))
-		((SpeciesInfo*)this)->cachedV[cacheKey] = V;
+	const size_t bytes=V->nData()*sizeof(complex);
+	if(shouldCache && bytes<=cachedVLimit) {
+		while(cachedVBytes>cachedVLimit-bytes) {
+			auto oldest=cachedV.begin();
+			for(auto iter=cachedV.begin();iter!=cachedV.end();++iter)
+				if(iter->second.lastUsed<oldest->second.lastUsed) oldest=iter;
+			cachedVBytes-=oldest->second.values->nData()*sizeof(complex);
+			cachedV.erase(oldest);
+		}
+		cachedV[&basis]={qnum.k,basis.generation(),V,++cachedVClock}; cachedVBytes+=bytes;
+	}
 	return V;
 }
 

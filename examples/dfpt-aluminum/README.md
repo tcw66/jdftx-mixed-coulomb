@@ -38,8 +38,10 @@ output definitions. The implementation follows Sec. II.C.4 of
 [Baroni et al., Rev. Mod. Phys. 73, 515 (2001)](https://doi.org/10.1103/RevModPhys.73.515).
 
 To export screened electron-phonon matrix elements, add
-`phonon-dfpt-electron-phonon yes` to `02-dfpt.in`. This explicitly solves all q
-points and displacement directions; offset reuse and q groups remain available.
+`phonon-dfpt-electron-phonon yes` to `02-dfpt.in`. Symmetry-equivalent q points
+and displacement directions reuse transformed response potentials; offset
+reuse and q groups remain available. Disable both DFPT symmetry options to
+compare against explicit responses.
 This writes native `phononHsub`, `phononKpts` and matching electronic states.
 Use `wannier-initial-state phonon.$VAR` and `wannier phononSupercell` with the
 DFPT q-grid dimensions to output interpolatable `mlwfHePh` matrix elements.

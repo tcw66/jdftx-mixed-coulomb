@@ -21,6 +21,79 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include <core/WignerSeitz.h>
 #include <core/ScalarFieldIO.h>
 #include <core/Blip.h>
+#include <cstdint>
+#include <fstream>
+#include <iomanip>
+#include <sys/stat.h>
+
+namespace {
+// This is a cache identity, not a security hash. Read the source files once
+// on the head so a new SCF gauge invalidates U and M0 even at the same mesh.
+void fingerprintFile(uint64_t& hash,const string& filename)
+{
+	std::ifstream file(filename.c_str(),std::ios::binary);
+	if(!file) die("Cannot fingerprint Wannier SCF input '%s'.\n",filename.c_str());
+	char buffer[65536];
+	while(file) {
+		file.read(buffer,sizeof(buffer));
+		for(std::streamsize i=0;i<file.gcount();i++) { hash^=static_cast<unsigned char>(buffer[i]); hash*=1099511628211ULL; }
+	}
+	if(!file.eof()) die("Cannot read Wannier SCF input '%s'.\n",filename.c_str());
+	hash^=255; hash*=1099511628211ULL; // separate file byte streams
+}
+bool olderThan(const string& checkpoint,const string& source)
+{
+	struct stat a,b;
+	if(stat(checkpoint.c_str(),&a) || stat(source.c_str(),&b)) return false;
+	return a.st_mtim.tv_sec<b.st_mtim.tv_sec || (a.st_mtim.tv_sec==b.st_mtim.tv_sec && a.st_mtim.tv_nsec<b.st_mtim.tv_nsec);
+}
+}
+
+void WannierMinimizer::checkCheckpoint(int iSpin)
+{
+	if(mpiWorld->isHead()) {
+		if(checkpointState.empty()) {
+			uint64_t hash=14695981039346656037ULL;
+			fingerprintFile(hash,e.eVars.wfnsFilename);
+			if(!e.eVars.eigsFilename.empty()) fingerprintFile(hash,e.eVars.eigsFilename);
+			if(!e.eInfo.initialFillingsFilename.empty()) fingerprintFile(hash,e.eInfo.initialFillingsFilename);
+			ostringstream identity;
+			identity << "JDFTx-Wannier-state-v1 " << std::hex << hash << std::dec << std::setprecision(17)
+				<< ' ' << nBands << ' ' << int(e.eInfo.spinType) << ' ' << e.cntrl.Ecut;
+			for(int d=0;d<3;d++) identity << ' ' << e.gInfo.S[d];
+			for(int i=0;i<3;i++) for(int j=0;j<3;j++) identity << ' ' << e.gInfo.R(i,j);
+			for(const auto& k:kMesh) for(int d=0;d<3;d++) identity << ' ' << k.point.k[d];
+			checkpointState=identity.str();
+		}
+		const string rotations=wannier.getFilename(Wannier::FilenameDump,"mlwfU",&iSpin);
+		const string overlaps=wannier.getFilename(Wannier::FilenameDump,"mlwfM0",&iSpin);
+		std::ifstream metadata(wannier.getFilename(Wannier::FilenameDump,"mlwfState",&iSpin).c_str());
+		if(metadata) {
+			std::string state; int centers=0;
+			std::getline(metadata,state); metadata >> centers;
+			checkpointCompatible=checkpointState==state.c_str() && centers==nCenters;
+		} else {
+			// Legacy checkpoints have no content identity. A newer SCF source
+			// proves they are stale; valid old checkpoints are upgraded on save.
+			checkpointCompatible=!olderThan(rotations,e.eVars.wfnsFilename) && !olderThan(overlaps,e.eVars.wfnsFilename);
+		}
+		if(wannier.loadRotations && !checkpointCompatible) {
+			logPrintf("Wannier restart invalidated: SCF state or checkpoint dimensions changed; recomputing rotations and overlaps.\n");
+			if(!wannier.minParams.nIterations) die("Changed SCF state requires nonzero wannier-minimize nIterations to relocalize.\n");
+		}
+		if(nFrozen) {
+			std::string filename(wannier.frozenUfilename.c_str());
+			bool compatible=!olderThan(wannier.frozenUfilename,e.eVars.wfnsFilename);
+			const std::string suffix=".mlwfU";
+			if(filename.size()>=suffix.size() && filename.substr(filename.size()-suffix.size())==suffix) {
+				std::ifstream frozenState(filename.substr(0,filename.size()-suffix.size())+".mlwfState");
+				if(frozenState) { std::string state; std::getline(frozenState,state); compatible=checkpointState==state.c_str(); }
+			}
+			if(!compatible) die("Frozen Wannier rotations belong to a different SCF state; regenerate the frozen manifold first.\n");
+		}
+	}
+	mpiWorld->bcast(checkpointCompatible);
+}
 
 WannierMinimizer::WannierMinimizer(const Everything& e, const Wannier& wannier, bool needSuperOverride)
 : e(e), wannier(wannier), sym(e.symm.getMatrices()),
@@ -263,7 +336,7 @@ void WannierMinimizer::initRotations(int iSpin)
 {
 	//Load initial rotations if necessary:
 	bool rotationsLoaded = false;
-	if(wannier.loadRotations)
+	if(wannier.loadRotations && checkpointCompatible)
 	{	//Read U
 		string fname = wannier.getFilename(Wannier::FilenameDump, "mlwfU", &iSpin);
 		bool Uexists = (fileSize(fname.c_str()) > 0);

@@ -38,6 +38,28 @@ Wannier::Wannier() : needAtomicOrbitals(false),
 void Wannier::setup(const Everything& everything)
 {	e = &everything;
 	logPrintf("\n---------- Initializing Wannier Function solver ----------\n");
+	if(koopmans)
+	{
+		Citations::add("Periodic Koopmans spectral functionals",
+			"N. Colonna, R. De Gennaro, E. Linscott and N. Marzari, J. Chem. Theory Comput. 18, 5435 (2022), doi:10.1021/acs.jctc.2c00161");
+		Citations::add("Koopmans DFPT implementation",
+			"E. B. Linscott et al., J. Chem. Theory Comput. 19, 7097 (2023), doi:10.1021/acs.jctc.3c00652");
+		if(e->eInfo.spinType!=SpinNone)
+			die("wannier-koopmans requires spintype no-spin.\n");
+		if(koopmansScreeningMesh.isNonzero()) {
+			const auto fine=e->eInfo.kFoldingCount();
+			for(int d=0;d<3;d++) if(koopmansScreeningMesh[d]<=0 || fine[d]%koopmansScreeningMesh[d])
+				die("wannier-koopmans-screening-mesh must divide kpoint-folding in each direction.\n");
+		}
+		if(e->coulombParams.geometry!=CoulombParams::Periodic || e->coulombParams.embed || e->coulombParams.Efield.isNonzero())
+			die("wannier-koopmans currently requires 3D periodic Coulomb without embedding or electric fields.\n");
+		if(e->eInfo.fillingsUpdate!=ElecInfo::FillingsConst || e->eInfo.hasU
+			|| e->exCorr.exxFactor() || e->exCorr.needsKEdensity() || e->exCorr.orbitalDep
+			|| !e->exCorr.hasEnergy() || e->exCorr.needFiniteDifference_dVxc())
+			die("wannier-koopmans requires fixed integer occupations and an analytic semilocal LDA/GGA functional without DFT+U.\n");
+		for(auto sp: e->iInfo.species) if(sp->isUltrasoft() || sp->isRelativistic())
+			die("wannier-koopmans requires nonrelativistic norm-conserving pseudopotentials.\n");
+	}
 
 	//Initialize minimization parameters:
 	minParams.fpLog = globalLog;

@@ -1,7 +1,7 @@
 # Reference fcc aluminum, a = 7.65 bohr. Relax and converge settings separately.
 lattice face-centered Cubic 7.65
 coords-type lattice
-ion-species /home/tyler/apps/jdftx_defect_coulomb/build/pseudopotentials/SG15/Al_ONCV_PBE.upf
+ion-species ../../build/pseudopotentials/SG15/Al_ONCV_PBE.upf
 ion Al 0 0 0 1
 coulomb-interaction periodic
 spintype no-spin

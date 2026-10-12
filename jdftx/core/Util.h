@@ -125,6 +125,7 @@ int assertStackTraceExit(const char* expr, const char* function, const char* fil
 
 // -----------  Logging ---------------
 extern FILE* globalLog;
+extern FILE* globalLogOrig; //!< logResume() target; scoped redirection must preserve both log pointers
 extern FILE* nullLog; //!< pointer to /dev/null
 void logSuspend(); //!< temporarily disable all log output (until logResume())
 void logResume(); //!< re-enable logging after a logSuspend() call

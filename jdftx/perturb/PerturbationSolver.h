@@ -52,7 +52,10 @@ public:
 	void Ksqrt(PerturbationGradient& v) override;
 	void solvePerturbation();
 	void reportPhononCache() const; //!< Log per-q cache usage on the group head
+	void releasePhononResponse(); //!< Release q response storage once force contractions are complete
 	void setResponseSymmetries(const std::vector<SpaceGroupOp>& operations);
+	void setBandCoarseSpace(std::vector<ColumnBundle>&& space);
+	void clearBandCoarseSpace();
 	complex forceResponse(); //!< Contract the current response with the selected displacement
 	
 	void calcdGradTau(); //!< Get derivative of Grad E w.r.t. external perturbations (local potential, charge density, or atomic position)
@@ -75,7 +78,8 @@ public:
 	void updateNonlocalDerivs(); //!< Update Vnl derivatives, run when atom perturbation is applied.
 	
 	//! Apply Hamiltonian to arbitrary wavefunction, unlike in ElecVars::applyHamiltonian does not have to be eVars.C
-	void applyH(const QuantumNumber& qnum, const diagMatrix& Fq, ColumnBundle& HCq, const ColumnBundle& Cq);
+	void applyH(const QuantumNumber& qnum, const diagMatrix& Fq, ColumnBundle& HCq, const ColumnBundle& Cq, const ColumnBundle* localH=nullptr);
+	void applyHBatched(const std::vector<const ColumnBundle*>& input,std::vector<ColumnBundle>& output);
 	
 	//! Derivative of H operator w.r.t. Vscloc
 	void dH_Vscloc(const QuantumNumber& qnum, ColumnBundle& HCq, const ColumnBundle& Cq, const ScalarFieldArray& dVscloc, const std::vector<matrix>* VdagCq = 0);
@@ -107,12 +111,34 @@ public:
 	complexScalarField get_nTot(const complexScalarFieldArray n) const { return n.size()==1 ? clone(n[0]) : n[0]+n[1]; }
 
 private:
+	struct FrozenOrbitals { ManagedArray<complex> values; ManagedArray<double> fillings; };
+	std::map<const ColumnBundle*,FrozenOrbitals> frozenOrbitals;
+	bool frozenOrbitalsReady=false, bandDiagonalChecked=false, bandDiagonalReady=false;
+	void prepareFrozenOrbitals();
+	bool timeReversalChecked=false;
+	void prepareTimeReversal();
+	int responseSigns() const;
 	bool screeningEnabled=true;
+	PerturbationGradient* bareHessianCapture=nullptr;
 	void solveNestedResponse();
 	PerturbationGradient screeningSource(const complexScalarFieldArray& potential);
 	bool solveIndependentBands(const PerturbationGradient& rhs,const SolverParams& parameters);
 	ColumnBundle bareBandOperator(const ColumnBundle& X,int k,const std::vector<int>& bands);
-	ColumnBundle bareBandPrecondition(const ColumnBundle& X,int k,int sign);
+	ColumnBundle bareBandPrecondition(const ColumnBundle& X,int k,int sign,const std::vector<int>* bands=nullptr);
+	// Fixed-q recycling supplies guesses and an outer preconditioner. The
+	// original coupled residual and source-based inner budgets remain decisive.
+	std::vector<ColumnBundle> bandCoarseSpace;
+	std::vector<matrix> bandCoarseInverse;
+	struct DielectricRecycle { complexScalarFieldArray source,response; };
+	std::vector<DielectricRecycle> dielectricRecycle[2]; //!< Separate charge / magnetic maps, sharing one byte budget
+	vector3<> recycleQ;
+	std::vector<size_t> recycleGenerations;
+	bool recycleReady=false;
+	size_t dielectricRecycleLimit=0;
+	void prepareResponseRecycling();
+	bool predictScreeningPotential(complexScalarFieldArray& potential);
+	void preconditionScreeningError(complexScalarFieldArray& error);
+	void recordScreeningResponse();
 	std::vector<SpaceGroupOp> responseSymmetries, kSymmetries;
 	std::vector<double> kCharacters, responseWeights;
 	std::vector<int> kRepresentatives, kOperations;
@@ -132,6 +158,8 @@ private:
 	complexScalarFieldArray barePotentialPlus, barePotentialMinus;
 	bool barePotentialReady=false;
 	std::map<const class AtomPerturbation*, PerturbationGradient> sourceCache;
+	const PerturbationGradient* cachedSource=nullptr;
+	const PerturbationGradient& sourceGradient() const;
 	size_t sourceCacheBytes=0;
 	int sourceCacheHits=0,sourceBuilds=0,barePotentialBuilds=0;
 	void cacheSource();

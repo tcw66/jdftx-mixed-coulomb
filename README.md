@@ -50,6 +50,22 @@ Wannier localization and disentanglement also need convergence. NumPy,
 SciPy and Matplotlib are required. Incomplete runs are rejected before plots
 are written.
 
+The native `wannier-koopmans` implementation screens one spin orbital through
+charge and magnetic response around the nonmagnetic ground state. It retains
+the original DFT total energy and writes the corrected spectral Hamiltonian.
+`wannier-koopmans-spin yes` is the default; `no` selects the legacy charge-only
+response. Verified orbital/q symmetry reuse, occupied-state response columns,
+MPI q groups and bounded caches reduce repeated work. The optional
+`wannier-koopmans-screening-mesh` changes only the q quadrature for screening;
+the electronic mesh and bare Hamiltonian keep the full resolution. Detailed
+iterations are enabled with `wannier-koopmans-verbose yes`.
+
+Wannier restart fingerprints invalidate rotations and overlap caches when
+the saved SCF wavefunctions change. KI regressions cover spin kernels,
+projector caches, mesh correlations, occupied-state response, symmetry reuse,
+solver agreement, coarse screening and MPI q groups. Run them with
+`ctest --test-dir build -R '^(koopmans|projectorCache|kMeshCorrelation|batchedProjectors)' --output-on-failure`.
+
 ## Mixed Coulomb features
 
 The mixed Coulomb implementation includes:

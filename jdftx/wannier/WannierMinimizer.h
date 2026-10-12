@@ -109,6 +109,9 @@ protected:
 	const Everything& e;
 	const Wannier& wannier;
 	const std::vector<SpaceGroupOp>& sym;
+	bool checkpointCompatible = true; //!< Rotations and overlaps belong to the loaded SCF wavefunctions
+	string checkpointState; //!< Content fingerprint of the SCF files and basis/mesh
+	void checkCheckpoint(int iSpin);
 	int nCenters, nFrozen, nBands; //!< number of Wannier centers (total and frozen) and source bands
 	int nSpins, qCount; //!< number of spins, and number of states per spin
 	int nSpinor; //!< number of spinor components
@@ -185,6 +188,7 @@ private:
 	std::vector<matrix> DblochMesh; //gradient matix elements in Bloch basis
 	void saveMLWF_C(int iSpin); //Wavefunctions
 	void saveMLWF_H(int iSpin, const matrix& phase); //Hamiltonian
+	void saveMLWF_KI(int iSpin, const matrix& phase); //screened second-order Koopmans Hamiltonian
 	void saveMLWF_P(int iSpin, const matrix& phase); //Momenta
 	void saveMLWF_D(int iSpin, const matrix& phase); //Gradient
 	void saveMLWF_S(int iSpin, const matrix& phase); //Spins

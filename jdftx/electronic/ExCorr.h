@@ -104,6 +104,13 @@ public:
 	//! The gradients will be set to zero for regions with n < nCut (useful to reduce numerical sensitivity in systems with empty space)
 	//! By default, sigma will be computed from n, but this can be overridden by specifying sigma_alt.
 	void getSecondDerivatives(const ScalarField& n, ScalarField& e_nn, ScalarField& e_sigma, ScalarField& e_nsigma, ScalarField& e_sigmasigma, double nCut=1e-4, ScalarField* sigma_alt = 0) const;
+
+	//! Magnetic Hessian at n_up=n_down=n/2, in variables m=n_up-n_down,
+	//! u=grad(n).grad(m), v=|grad(m)|^2. Enables spin-resolved response of a
+	//! nonmagnetic ground state without duplicating identical Bloch orbitals.
+	void getSpinSecondDerivatives(const ScalarField& n, const ScalarField& sigma,
+		ScalarField& e_mm, ScalarField& e_mu, ScalarField& e_uu, ScalarField& e_v,
+		double nCut=1e-9) const;
 	
 	//! Get change in Vxc due to change in density dn
 	void get_dVxc(const ScalarFieldArray& n, ScalarFieldArray* dVxc, IncludeTXC includeTXC,

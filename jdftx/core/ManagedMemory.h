@@ -38,6 +38,7 @@ class ManagedMemoryBase
 {
 public:
 	static void reportUsage(); //!< print memory usage report
+	static void reportAllocationCache(const char* phase); //!< live/reserved pool bytes and raw allocation counts
 
 protected:
 	ManagedMemoryBase(): nBytes(0),c(0),onGpu(false) {} //!< Initialize a valid state, but don't allocate anything

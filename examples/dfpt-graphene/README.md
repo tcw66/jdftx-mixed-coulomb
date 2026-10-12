@@ -15,8 +15,9 @@ mpirun -n 4 ../../build/jdftx -i dfpt.in -o dfpt.out
 For GPU runs, replace the executable with `../../build/jdftx_gpu`.
 `dfpt.in` uses two MPI q groups, so launch with at least two ranks; set
 `phonon-dfpt-q-groups 1` for a serial run. The nested solver and offset reuse
-are enabled. Electron–phonon export computes every q and Cartesian displacement
-explicitly, overriding the symmetry reduction switches in this input.
+are enabled. Electron–phonon export retains q and Cartesian displacement
+symmetry reductions and reconstructs equivalent response potentials. Disable
+both DFPT symmetry switches to compare against explicit responses.
 
 ## Slab and restart settings
 
@@ -75,3 +76,18 @@ interpolation. No conversion from per-q files is needed. See the
 [silicon example](../dfpt-silicon-electron-phonon/README.md) for a complete
 Wannier input and the [DFPT guide](../../jdftx/doc/tutorials/phonon/DFPT.dox)
 for normalization, phonon interpolation and supported features.
+
+## Plot the phonon dispersion
+
+After DFPT finishes, run from this directory:
+
+```bash
+python3 plot_dispersion.py
+```
+
+The script interpolates the native force matrices along Γ–M–K–Γ with distances
+in Cartesian reciprocal space. It writes PNG/PDF plots, a q-path, a frequency
+table and eigenvectors to `results_dispersion/`. The plot shows meV and cm⁻¹,
+with in-plane and out-of-plane motion classified from the phonon eigenvectors.
+Negative values denote imaginary frequencies. Python, NumPy and Matplotlib
+are required. Use `--output` or `--points-per-segment` to customize output.

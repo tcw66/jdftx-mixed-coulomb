@@ -4,6 +4,9 @@
 #include <electronic/Everything.h>
 #include <electronic/ElecMinimizer.h>
 #include <electronic/ColumnBundleTransform.h>
+#include <electronic/ColumnBundleFFT.h>
+#include <core/Operators.h>
+#include <tuple>
 #include <commands/parser.h>
 #include <commands/command.h>
 #include <core/LatticeUtils.h>
@@ -76,7 +79,7 @@ void synchronizeElectronPhononStates(Everything& e,const MPIUtil* parent)
 		parent->bcastData(fillings,root);
 		if(ei.isMine(k)) {
 			e.eVars.Hsub_eigs[k]=energies;
-			e.eVars.Haux_eigs[k]=energies;
+			if(ei.fillingsUpdate==ElecInfo::FillingsHsub) e.eVars.Haux_eigs[k]=energies;
 			e.eVars.F[k]=fillings;
 			e.iInfo.project(C,e.eVars.VdagC[k]);
 		}
@@ -89,24 +92,68 @@ void synchronizeElectronPhononStates(Everything& e,const MPIUtil* parent)
 	logPrintf("Electron-phonon export: synchronized ground-state band gauge across q groups.\n");
 }
 
+// These caches live only between response solving and export of one q orbit.
+struct ElectronPhononExportCache {
+	struct Projections { matrix value; std::array<matrix,3> derivative; };
+	Everything& e;
+	std::vector<ManagedArray<complex>> wavefunctions;
+	std::map<std::tuple<int,int,int>,Projections> projections;
+	ElectronPhononExportCache(Everything& e,const ElectronPhononMesh& mesh) : e(e),wavefunctions(mesh.indices.size()) {
+		size_t used=0,limit=size_t(e.pertInfo.phononEphCacheMiB*1024.*1024.);
+		if(e.pertInfo.phononOptimize) for(size_t i=0;i<mesh.indices.size();i++) {
+			int k=mesh.indices[i]; if(!e.eInfo.isMine(k)) continue;
+			size_t bytes=size_t(e.eInfo.nBands)*e.basis[k].gInfo->nr*sizeof(complex);
+			if(bytes>limit-used) continue;
+			wavefunctions[i]=realSpaceColumns(e.eVars.C[k]); used+=bytes;
+		}
+		logPrintf("Electron-phonon real-space cache: %.3f MiB on group head (limit %.3f MiB/rank).\n",used/(1024.*1024.),e.pertInfo.phononEphCacheMiB);
+		ManagedMemoryBase::reportAllocationCache("export cache ready");
+	}
+	const Projections& source(int species,int atom,int k) {
+		auto key=std::make_tuple(species,atom,k); auto found=projections.find(key);
+		if(found==projections.end()) {
+			Projections entry; const ColumnBundle& C=e.eVars.C[k];
+			ColumnBundle P=e.iInfo.species[species]->getVatom(C,atom);
+			entry.value=P^C;
+			for(int direction=0;direction<3;direction++) {
+				vector3<> unit; unit[direction]=1.; entry.derivative[direction]=(-D(P,unit))^C;
+			}
+			found=projections.emplace(key,std::move(entry)).first;
+		}
+		return found->second;
+	}
+};
+
 class ElectronPhononWriter {
 	Everything& e;
 	PerturbationSolver& solver;
 	const ElectronPhononMesh& mesh;
+	ElectronPhononExportCache& cache;
+	bool reciprocity;
+	std::vector<Basis> targetBases;
+	std::vector<QuantumNumber> targetQnums;
 	std::vector<ColumnBundle> targets;
 	std::vector<int> targetIndices;
 	FILE* fp=nullptr;
 public:
-	ElectronPhononWriter(Everything& e,PerturbationSolver& solver,const ElectronPhononMesh& mesh)
-	: e(e),solver(solver),mesh(mesh),targets(mesh.indices.size()),targetIndices(mesh.indices.size(),-1)
+	ElectronPhononWriter(Everything& e,PerturbationSolver& solver,const ElectronPhononMesh& mesh,
+		ElectronPhononExportCache& cache,bool reciprocity)
+	: e(e),solver(solver),mesh(mesh),cache(cache),reciprocity(reciprocity),targetBases(mesh.indices.size()),targetQnums(mesh.indices.size()),
+		targets(mesh.indices.size()),targetIndices(mesh.indices.size(),-1)
 	{
 		const ElecInfo& ei=e.eInfo;
 		const PerturbationInfo& p=e.pertInfo;
 		for(size_t i=0;i<mesh.indices.size();i++) {
 			int k=mesh.indices[i];
+			targetQnums[i]=ei.qnums[k]; targetQnums[i].k+=p.qvec;
 			for(size_t j=0;j<mesh.indices.size();j++)
-				if(sameReciprocalPoint(p.kplusq_vectors[k].k,mesh.kpoints[j])) {targetIndices[i]=j; break;}
+				if(sameReciprocalPoint(targetQnums[i].k,mesh.kpoints[j])) {targetIndices[i]=j; break;}
 			if(targetIndices[i]<0) die("Missing commensurate electron-phonon target k point.\n");
+			if(ei.isMine(k)) {
+				targetBases[i].setup(e.gInfoWfns ? *e.gInfoWfns : e.gInfo,e.iInfo,e.cntrl.Ecut,targetQnums[i].k);
+				targets[i].init(ei.nBands,targetBases[i].nbasis,&targetBases[i],&targetQnums[i],isGpuEnabled());
+				targets[i].zero();
+			}
 		}
 		for(int s:mesh.indices) {
 			ColumnBundle received;
@@ -116,7 +163,6 @@ public:
 			for(size_t i=0;i<mesh.indices.size();i++) {
 				int k=mesh.indices[i];
 				if(!ei.isMine(k) || mesh.indices[targetIndices[i]]!=s) continue;
-				targets[i]=p.Cinc[k].similar(); targets[i].zero();
 				ColumnBundleTransform::BasisWrapper wrapper(*targets[i].basis);
 				ColumnBundleTransform(ei.qnums[s].k,e.basis[s],targets[i].qnum->k,wrapper,
 					1,SpaceGroupOp(),1).scatterAxpy(1.,source,targets[i],0,1);
@@ -129,31 +175,70 @@ public:
 			if(!fp) die_alone("Cannot open electron-phonon output '%s'.\n",filename.c_str());
 		}
 	}
-	void writeDisplacement(int mode,double massScale)
+	void writeDisplacement(int mode,double massScale,const complexScalarFieldArray& potential)
 	{
 		const ElecInfo& ei=e.eInfo;
-		const PerturbationInfo& p=e.pertInfo;
-		size_t nk=mesh.indices.size();
+		size_t nk=mesh.indices.size(),blockSize=size_t(ei.nBands)*ei.nBands;
+		std::vector<complex> payload(nk*blockSize,complex());
+		complexScalarFieldArray total;
+		if(e.pertInfo.phononOptimize) {
+			total.resize(potential.size());
+			solver.getdVsclocTau(total,1); total=total+potential;
+		}
+		int contractions=0;
 		for(size_t i=0;i<nk;i++) {
 			int k=mesh.indices[i];
+			if(reciprocity && size_t(targetIndices[i])<i) continue;
+			if(!ei.isMine(k)) continue;
 			matrix derivative;
-			if(ei.isMine(k)) {
+			if(e.pertInfo.phononOptimize) {
+				ColumnBundle local=cache.wavefunctions[i].nData()
+					? Idag_DiagV_I_cached(e.eVars.C[k],total,cache.wavefunctions[i],targets[i])
+					: Idag_DiagV_I(e.eVars.C[k],total,&targets[i]);
+				derivative=targets[i]^local;
+				const AtomicMode& atom=e.pertInfo.datom->mode; auto species=e.iInfo.species[atom.sp];
+				if(species->MnlAll.nRows()) {
+					const auto& source=cache.source(atom.sp,atom.at,k);
+					ColumnBundle P=species->getVatom(targets[i],atom.at), dP=-D(P,atom.dirCartesian);
+					matrix sourceDerivative=zeroes(source.value.nRows(),source.value.nCols());
+					for(int d=0;d<3;d++) if(atom.dirCartesian[d]) sourceDerivative+=atom.dirCartesian[d]*source.derivative[d];
+					derivative+=(targets[i]^dP)*(species->MnlAll*source.value)
+						+(targets[i]^P)*(species->MnlAll*sourceDerivative);
+				}
+			} else {
 				ColumnBundle bare=targets[i].similar(),induced=targets[i].similar();
 				solver.dHtau(*targets[i].qnum,bare,e.eVars.C[k],1);
-				solver.dHpsi(*targets[i].qnum,induced,e.eVars.C[k],p.dVsclocpq);
-				// A single-cell displacement is the discrete inverse q transform:
-				// its band matrix has the additional 1/Nq supercell normalization.
-				derivative=(massScale/nk)*(targets[i]^(bare+induced));
-			} else derivative.init(ei.nBands,ei.nBands);
-			if(mpiWorld->nProcesses()>1) mpiWorld->bcastData(derivative,ei.whose(k));
-			if(fp) {
-				off_t offset=off_t(((size_t(mode)*nk+targetIndices[i])*nk+i)*size_t(ei.nBands)*ei.nBands*sizeof(complex));
-				if(fseeko(fp,offset,SEEK_SET)) die_alone("Cannot seek electron-phonon output.\n");
-				derivative.write(fp);
-				if(ferror(fp)) die_alone("Error writing electron-phonon derivatives.\n");
+				solver.dHpsi(*targets[i].qnum,induced,e.eVars.C[k],potential);
+				bare+=induced; derivative=targets[i]^bare;
+			}
+			derivative*=massScale/nk;
+			std::copy(derivative.data(),derivative.data()+blockSize,payload.begin()+i*blockSize);
+			contractions++;
+		}
+		if(mpiWorld->nProcesses()>1) mpiWorld->reduceData(payload,MPIUtil::ReduceSum,0);
+		mpiWorld->allReduce(contractions,MPIUtil::ReduceSum);
+		if(fp) {
+			std::vector<complex> reversed(blockSize);
+			auto write=[&](size_t target,size_t source,const complex* data) {
+				off_t offset=off_t(((size_t(mode)*nk+target)*nk+source)*blockSize*sizeof(complex));
+				if(fseeko(fp,offset,SEEK_SET) || fwrite(data,sizeof(complex),blockSize,fp)!=blockSize)
+					die_alone("Error writing electron-phonon derivatives.\n");
+			};
+			for(size_t i=0;i<nk;i++) {
+				size_t target=targetIndices[i]; if(reciprocity && target<i) continue;
+				const complex* data=payload.data()+i*blockSize;
+				write(target,i,data);
+				if(reciprocity && target!=i) {
+					for(int row=0;row<ei.nBands;row++) for(int col=0;col<ei.nBands;col++)
+						reversed[row+ei.nBands*col]=data[col+ei.nBands*row].conj();
+					write(i,target,reversed.data());
+				}
 			}
 		}
+		logPrintf("Electron-phonon export q [%g %g %g], column %d: %d/%zu contractions%s.\n",
+			e.pertInfo.qvec[0],e.pertInfo.qvec[1],e.pertInfo.qvec[2],mode+1,contractions,nk,reciprocity ? " (reciprocity)" : "");
 	}
+
 	~ElectronPhononWriter()
 	{ if(fp && fclose(fp)) die_alone("Error closing electron-phonon derivatives.\n"); }
 };
@@ -312,6 +397,86 @@ matrix reconstructDisplacements(const matrix& columns,const DisplacementPlan& pl
 	// M T e_a = T M e_a (or T conj(M e_a) for antiunitary operations).
 	// The symmetry images of the computed columns span the full displacement space.
 	return numerator*inv(plan.gram);
+}
+
+// Reconstruct only the induced local operator. Bare local/nonlocal ionic
+// derivatives are evaluated analytically at each target q and displacement.
+// Contracting in the actual target eigenstates avoids electronic sewing-matrix
+// assumptions, including arbitrary phases and rotations of degenerate bands.
+std::vector<complexScalarFieldArray> reconstructElectronPhononPotentials(
+	const GridInfo& g,const std::vector<QSymmetry>& symmetries,
+	const vector3<>& sourceQ,const vector3<>& targetQ,int nSigns,int nm,
+	const std::vector<int>& columns,const std::vector<complexScalarFieldArray>& sources)
+{
+	assert(!sources.empty() && sources.size()==columns.size());
+	std::vector<complexScalarFieldArray> numerator(nm),result(nm);
+	for(auto& fields:numerator) {
+		fields.resize(sources[0].size());
+		for(auto& field:fields) { field=complexScalarFieldData::alloc(g,isGpuEnabled()); initZero(field); }
+	}
+	matrix gram=zeroes(nm,nm);
+	for(const auto& sym:symmetries) for(int sign=0;sign<nSigns;sign++) {
+		vector3<> signedQ=sign ? -sourceQ : sourceQ;
+		if(!sameReciprocalPoint(signedQ*sym.op.inv().rot,targetQ)) continue;
+		// Use unwrapped real-space coordinates in the Bloch phase. This includes
+		// fractional translations and reciprocal wrapping at q-grid boundaries.
+		std::vector<int> indices(g.nr);
+		std::vector<complex> phases(g.nr);
+		vector3<int> x;
+		for(x[0]=0;x[0]<g.S[0];x[0]++) for(x[1]=0;x[1]<g.S[1];x[1]++) for(x[2]=0;x[2]<g.S[2];x[2]++) {
+			vector3<> position;
+			for(int d=0;d<3;d++) position[d]=double(x[d])/g.S[d];
+			vector3<> image=sym.op.rot*position+sym.op.a;
+			vector3<int> y;
+			for(int d=0;d<3;d++) { int sample=int(round(image[d]*g.S[d])); y[d]=(sample%g.S[d]+g.S[d])%g.S[d]; }
+			int i=(x[0]*g.S[1]+x[1])*g.S[2]+x[2];
+			indices[i]=(y[0]*g.S[1]+y[1])*g.S[2]+y[2];
+			phases[i]=cis(2*M_PI*(dot(signedQ,position)-dot(targetQ,image)));
+		}
+		#ifdef GPU_ENABLED
+		ManagedArray<int> permutation(indices.data(),indices.size());
+		ManagedArray<complex> phaseArray(phases.data(),phases.size());
+		const int* deviceIndices=permutation.dataGpu();
+		const complex* devicePhases=phaseArray.dataGpu();
+		#endif
+		for(size_t ia=0;ia<columns.size();ia++) {
+			int a=columns[ia],atom=a/3;
+			std::vector<complex> displacement(nm,complex());
+			complex phase=cis(-2*M_PI*dot(targetQ,sym.cellShift[atom]));
+			for(int b=0;b<3;b++) displacement[3*sym.atomMap[atom]+b]=phase*sym.cartesian(b,a%3);
+			for(int b=0;b<nm;b++) for(int c=0;c<nm;c++)
+				gram.set(b,c,gram(b,c)+displacement[b]*displacement[c].conj());
+			for(size_t spin=0;spin<sources[ia].size();spin++) {
+				const complex* input=sources[ia][spin]->dataPref();
+				for(int b=0;b<nm;b++) if(displacement[b].norm()>1e-24) {
+					complex* output=numerator[b][spin]->dataPref();
+					complex weight=displacement[b].conj();
+					#ifdef GPU_ENABLED
+					fieldSymmetryAccumulate_gpu(g.nr,deviceIndices,devicePhases,input,output,weight,bool(sign));
+					#else
+					for(int i=0;i<g.nr;i++) output[indices[i]]+=weight*phases[i]*(sign ? input[i].conj() : input[i]);
+					#endif
+				}
+			}
+		}
+	}
+	matrix vectors; diagMatrix values; gram.diagonalize(vectors,values);
+	if(values.front()<=1e-8*values.back()) die("Electron-phonon symmetry images do not span target displacements.\n");
+	matrix inverse=inv(gram);
+	for(int b=0;b<nm;b++) {
+		result[b].resize(sources[0].size());
+		for(size_t spin=0;spin<result[b].size();spin++) {
+			result[b][spin]=complexScalarFieldData::alloc(g,isGpuEnabled()); initZero(result[b][spin]);
+			complex* output=result[b][spin]->dataPref();
+			for(int c=0;c<nm;c++) {
+				complex weight=inverse(c,b);
+				if(weight.norm()<1e-24) continue;
+				const complex* input=numerator[c][spin]->dataPref();
+				callPref(eblas_zaxpy)(g.nr,weight,input,1,output,1);
+			}
+		}
+	}
+	return result;
 }
 
 // Hessian of erfc(eta*r)/r. Gaussian separation cancels against reciprocal sum.
@@ -726,11 +891,7 @@ void calculateDFPTPhonons(Everything& e,const MPIUtil* parent)
 	}
 	if(p.phononElectronPhonon) {
 		e.eVars.setEigenvectors();
-		// Force-matrix symmetry transformations do not supply electronic sewing
-		// matrices. Explicit responses preserve the actual screened operator.
-		p.phononUseSymmetry=false;
-		p.phononReduceDisplacements=false;
-		logPrintf("Electron-phonon export: explicitly solving all q points and Cartesian displacements; offset reuse and MPI q groups retained.\n");
+		logPrintf("Electron-phonon export: reconstructing screened potentials under q/displacement symmetries; band contractions use the full electronic mesh.\n");
 	}
 	// Fixed-screening equations are independent by source eigenstate. Occupied
 	// insulating subspaces may otherwise retain an arbitrary unitary gauge.
@@ -821,6 +982,12 @@ void calculateDFPTPhonons(Everything& e,const MPIUtil* parent)
 		// A relative heuristic, not a timing prediction: one setup unit,
 		// one unit per response, and two units for a fully off-mesh offset solve.
 		costs[i]=1.+displacementPlans[i].columns.size()+double(offMesh)/e.eInfo.nStates;
+		if(p.phononElectronPhonon) {
+			int orbit=std::count(representatives.begin(),representatives.end(),independent[i]);
+			// Export is one operator application per mode/k, while a response
+			// uses many Hamiltonian applications. Keep this heuristic modest.
+			costs[i]+=0.25*orbit*nm*double(ephMesh->indices.size())/e.eInfo.nStates;
+		}
 	}
 	std::vector<int> qGroups(independent.size());
 	if(p.phononBalanceQGroups) qGroups=balanceDFPTQGroups(costs,groupCapacities);
@@ -872,7 +1039,7 @@ void calculateDFPTPhonons(Everything& e,const MPIUtil* parent)
 		std::vector<SpaceGroupOp> responseOperations;
 		for(const auto& sym:symmetries) responseOperations.push_back(sym.op);
 		solver.setResponseSymmetries(responseOperations);
-		std::unique_ptr<ElectronPhononWriter> eph;
+		std::vector<complexScalarFieldArray> inducedPotentials;
 		matrix F=bare+ionicForceMatrix(e.gInfo.R,atoms,q,e.coulombParams);
 		const auto& plan=displacementPlans[iRepresentative];
 		for(size_t ia=0;ia<plan.columns.size();ia++) {
@@ -881,8 +1048,7 @@ void calculateDFPTPhonons(Everything& e,const MPIUtil* parent)
 			p.datom=modes[a];
 			solver.solvePerturbation();
 			if(p.phononElectronPhonon) {
-				if(!eph) eph.reset(new ElectronPhononWriter(e,solver,*ephMesh));
-				eph->writeDisplacement(a,massScale[a]); // before calcdGradTau changes the displaced atom
+				inducedPotentials.push_back(clone(p.dVsclocpq));
 			}
 			residuals[responseOffsets[iRepresentative]+ia]=p.lastResponseResidual;
 			// Freeze this response: calcdGradTau below does not change dC.
@@ -912,6 +1078,28 @@ void calculateDFPTPhonons(Everything& e,const MPIUtil* parent)
 			const complex* add=mapped.data();
 			for(int i=0;i<nm*nm;i++) sum[i]+=add[i];
 			counts[target]++;
+		}
+		if(p.phononElectronPhonon) {
+			ManagedMemoryBase::reportAllocationCache("response complete");
+			solver.releasePhononResponse();
+			ManagedMemoryBase::reportAllocationCache("response released");
+			ElectronPhononExportCache exportCache(e,*ephMesh);
+			// The complete orbit belongs to this q group, so output blocks remain
+			// disjoint even though only the representative response was solved.
+			for(int target=0;target<nq;target++) if(representatives[target]==iq) {
+				auto potentials=reconstructElectronPhononPotentials(e.gInfo,symmetries,q,qpoints[target],
+					nSigns,nm,plan.columns,inducedPotentials);
+				p.qvec=qpoints[target];
+				PerturbationSolver exportSolver(e);
+				int partner=qGridIndex(-qpoints[target],grid);
+				bool reciprocity=p.phononOptimize && p.phononEphReciprocity && representatives[partner]==iq;
+				ElectronPhononWriter writer(e,exportSolver,*ephMesh,exportCache,reciprocity);
+				for(int a=0;a<nm;a++) {
+					p.datom=modes[a];
+					writer.writeDisplacement(a,massScale[a],potentials[a]);
+				}
+			}
+			p.qvec=q;
 		}
 	}
 	if(parent) {

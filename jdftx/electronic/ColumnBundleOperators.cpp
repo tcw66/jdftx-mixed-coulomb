@@ -20,6 +20,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 
 #include <electronic/ColumnBundle.h>
 #include <electronic/ColumnBundleOperators_internal.h>
+#include <electronic/ColumnBundleFFT.h>
 #include <electronic/Basis.h>
 #include <electronic/ElecInfo.h>
 #include <electronic/IonInfo.h>
@@ -75,7 +76,10 @@ void ColumnBundleMatrixProduct::scaleAccumulate(double alpha, double beta, Colum
 		nColsOut = Mtmp.nCols();
 		assert(!Y.isSpinor());
 		if(beta) { assert(YM); assert(YM.nCols()==mIn.nCols()); assert(YM.colLength()==Y.colLength()*2); }
-		else YM.init(mIn.nCols(), Y.colLength()*2, Y.basis, Y.qnum, isGpuEnabled());
+		else {
+			YM.init(mIn.nCols(), Y.colLength()*2, Y.basis, Y.qnum, isGpuEnabled());
+			YM.shareQuantumNumber(Y);
+		}
 	}
 	else
 	{	Mop = Mst.op;
@@ -230,10 +234,16 @@ inline void getVupDn(const complexScalarField& Vre, const complexScalarField& Vi
 	VdnUp = 0.5*Complex(reVre+imVim, imVre-reVim); //note not conj(VupDn) because Vre and Vim are each complex
 }
 
+#ifdef GPU_ENABLED
+inline void getBatchedPotentialPointer(const ScalarField& V,const double*& realPointer,const complex*&)
+{ realPointer=V->dataGpu(); }
+inline void getBatchedPotentialPointer(const complexScalarField& V,const double*&,const complex*& complexPointer)
+{ complexPointer=V->dataGpu(); }
+#endif
+
 template<typename ScalarFieldType> //templated over ScalarField and complexScalarField
 ColumnBundle Idag_DiagV_I_apply(const ColumnBundle& C, const std::vector<ScalarFieldType>& V, const ColumnBundle* Cout)
 {	static StopWatch watch("Idag_DiagV_I"); watch.start();
-	ColumnBundle VC = Cout->similar(); VC.zero();
 	//Convert V to wfns grid if necessary:
 	const GridInfo& gInfoWfns = *(C.basis->gInfo);
 	std::vector<ScalarFieldType> Vtmp;
@@ -242,6 +252,15 @@ ColumnBundle Idag_DiagV_I_apply(const ColumnBundle& C, const std::vector<ScalarF
 			Vtmp.push_back(Jdag(changeGrid(Idag(Vs), gInfoWfns), true));
 	const std::vector<ScalarFieldType>& Vwfns = Vtmp.size() ? Vtmp : V;
 	assert(Vwfns.size()==1 || Vwfns.size()==2 || Vwfns.size()==4);
+	#ifdef GPU_ENABLED
+	if(!C.isSpinor() && Vwfns.size()==1 && useBatchedColumnFFT()) {
+		const double* realPotential=nullptr; const complex* complexPotential=nullptr;
+		getBatchedPotentialPointer(Vwfns[0],realPotential,complexPotential);
+		ColumnBundle VC=batchedLocalPotential(C,realPotential,complexPotential,*Cout);
+		watch.stop(); return VC;
+	}
+	#endif
+	ColumnBundle VC = Cout->similar(); VC.zero();
 	if(Vwfns.size()==2) assert(!C.isSpinor());
 	if(Vwfns.size()==1 || Vwfns.size()==2)
 	{	threadLaunch(isGpuEnabled()?1:0, Idag_DiagV_I_sub<ScalarFieldType>, C.nCols(), &C, &Vwfns, &VC);
@@ -411,12 +430,16 @@ void precond_inv_kinetic(ColumnBundle &Y, double KErollover, bool sqrtop)
 diagMatrix diagDot(const ColumnBundle& X, const ColumnBundle& Y)
 {	assert(X.nCols()==Y.nCols());
 	assert(X.basis==Y.basis);
+	#ifdef GPU_ENABLED
+	return batchedDiagDot({&X},{&Y}).front();
+	#else
 	diagMatrix ret(X.nCols());
 	const complex* Xdata = X.dataPref();
 	const complex* Ydata = Y.dataPref();
 	for(size_t b=0; b<ret.size(); b++)
 		ret[b] = callPref(eblas_zdotc)(X.colLength(), Xdata+X.index(b,0),1, Ydata+Y.index(b,0),1).real();
 	return ret;
+	#endif
 }
 
 void precond_inv_kinetic_band(int nbasis, int ncols, complex* Ydata, const double* KEref,

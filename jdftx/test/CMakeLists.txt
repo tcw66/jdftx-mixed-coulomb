@@ -1,6 +1,46 @@
 add_custom_target(testresults COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/printResults.sh ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR} )
 add_custom_target(testclean COMMAND rm -f */*.out */*.wfns */*.fillings */*.ionpos */*.eigenvals */*.fluidState */results */summary WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR} )
 
+# Direct numerical regression for ordinary/derivative projector cache entries.
+add_executable(checkProjectorCache koopmans/checkProjectorCache.cpp)
+target_link_libraries(checkProjectorCache jdftxlib)
+set_JDFTx_flags(checkProjectorCache OFF)
+add_executable(checkKMeshCorrelation koopmans/checkKMeshCorrelation.cpp)
+target_link_libraries(checkKMeshCorrelation jdftxlib)
+set_JDFTx_flags(checkKMeshCorrelation OFF)
+add_test(NAME kMeshCorrelation COMMAND checkKMeshCorrelation)
+set_tests_properties(kMeshCorrelation PROPERTIES TIMEOUT 60)
+add_executable(checkBatchedProjectors koopmans/checkBatchedProjectors.cpp)
+target_link_libraries(checkBatchedProjectors jdftxlib)
+set_JDFTx_flags(checkBatchedProjectors OFF)
+add_test(NAME batchedProjectors COMMAND checkBatchedProjectors)
+set_tests_properties(batchedProjectors PROPERTIES TIMEOUT 60)
+add_executable(checkSpinKernel koopmans/checkSpinKernel.cpp)
+target_link_libraries(checkSpinKernel jdftxlib)
+set_JDFTx_flags(checkSpinKernel OFF)
+add_test(NAME koopmansSpinKernel COMMAND checkSpinKernel)
+set_tests_properties(koopmansSpinKernel PROPERTIES TIMEOUT 60)
+if(EnableCUDA)
+	add_executable(checkProjectorCache_gpu koopmans/checkProjectorCache.cpp)
+	target_link_libraries(checkProjectorCache_gpu jdftxlib_gpu)
+	set_JDFTx_flags(checkProjectorCache_gpu ON)
+	add_executable(checkKMeshCorrelation_gpu koopmans/checkKMeshCorrelation.cpp)
+	target_link_libraries(checkKMeshCorrelation_gpu jdftxlib_gpu)
+	set_JDFTx_flags(checkKMeshCorrelation_gpu ON)
+	add_test(NAME kMeshCorrelationGPU COMMAND checkKMeshCorrelation_gpu)
+	set_tests_properties(kMeshCorrelationGPU PROPERTIES TIMEOUT 60)
+	add_executable(checkBatchedProjectors_gpu koopmans/checkBatchedProjectors.cpp)
+	target_link_libraries(checkBatchedProjectors_gpu jdftxlib_gpu)
+	set_JDFTx_flags(checkBatchedProjectors_gpu ON)
+	add_test(NAME batchedProjectorsGPU COMMAND checkBatchedProjectors_gpu)
+	set_tests_properties(batchedProjectorsGPU PROPERTIES TIMEOUT 60)
+	add_executable(checkSpinKernel_gpu koopmans/checkSpinKernel.cpp)
+	target_link_libraries(checkSpinKernel_gpu jdftxlib_gpu CUDA::cudart)
+	set_JDFTx_flags(checkSpinKernel_gpu ON)
+	add_test(NAME koopmansSpinKernelGPU COMMAND checkSpinKernel_gpu)
+	set_tests_properties(koopmansSpinKernelGPU PROPERTIES TIMEOUT 60)
+endif()
+
 macro(add_jdftx_test testName)
 	add_test(NAME ${testName} COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/runTest.sh ${testName} ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_BINARY_DIR})
 endmacro()
@@ -51,6 +91,64 @@ find_file(DFPT_H_PSEUDO H_ONCV_PBE.upf PATHS
     ${CMAKE_BINARY_DIR}/pseudopotentials/SG15
     "$ENV{JDFTX_PSEUDO_DIR}/SG15")
 if(Python3_Interpreter_FOUND AND NUMPY_STATUS EQUAL 0 AND DFPT_H_PSEUDO)
+	file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/projector-cache.in
+		"ion-species ${DFPT_H_PSEUDO}\nlattice Cubic 8\nion H 0.4 0.5 0.5 1\nion H 0.6 0.5 0.5 1\nelec-cutoff 6\nelec-n-bands 4\nsymmetries none\n")
+	add_test(NAME projectorCache COMMAND checkProjectorCache
+		-i ${CMAKE_CURRENT_BINARY_DIR}/projector-cache.in -o ${CMAKE_CURRENT_BINARY_DIR}/projector-cache.out)
+	set_tests_properties(projectorCache PROPERTIES TIMEOUT 60)
+	if(EnableCUDA)
+		add_test(NAME projectorCacheGPU COMMAND checkProjectorCache_gpu
+			-i ${CMAKE_CURRENT_BINARY_DIR}/projector-cache.in -o ${CMAKE_CURRENT_BINARY_DIR}/projector-cache-gpu.out)
+		set_tests_properties(projectorCacheGPU PROPERTIES TIMEOUT 60)
+	endif()
+	add_test(NAME koopmansKI COMMAND ${Python3_EXECUTABLE}
+		${CMAKE_CURRENT_SOURCE_DIR}/koopmans/checkKI.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO})
+	set_tests_properties(koopmansKI PROPERTIES TIMEOUT 300)
+	add_test(NAME koopmansSpinKI COMMAND ${Python3_EXECUTABLE}
+		${CMAKE_CURRENT_SOURCE_DIR}/koopmans/checkKI.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO} --spin)
+	set_tests_properties(koopmansSpinKI PROPERTIES TIMEOUT 300)
+	add_test(NAME koopmansSymmetry COMMAND ${Python3_EXECUTABLE}
+		${CMAKE_CURRENT_SOURCE_DIR}/koopmans/checkSymmetry.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO})
+	set_tests_properties(koopmansSymmetry PROPERTIES TIMEOUT 300)
+	add_test(NAME koopmansReuse COMMAND ${Python3_EXECUTABLE}
+		${CMAKE_CURRENT_SOURCE_DIR}/koopmans/checkReuse.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO})
+	set_tests_properties(koopmansReuse PROPERTIES TIMEOUT 300)
+	add_test(NAME koopmansScreeningMesh COMMAND ${Python3_EXECUTABLE}
+		${CMAKE_CURRENT_SOURCE_DIR}/koopmans/checkScreeningMesh.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO})
+	set_tests_properties(koopmansScreeningMesh PROPERTIES TIMEOUT 300)
+	add_test(NAME koopmansOccupied COMMAND ${Python3_EXECUTABLE}
+		${CMAKE_CURRENT_SOURCE_DIR}/koopmans/checkOccupied.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO})
+	set_tests_properties(koopmansOccupied PROPERTIES TIMEOUT 300)
+	add_test(NAME koopmansResponseSpeedups COMMAND ${Python3_EXECUTABLE}
+		${CMAKE_CURRENT_SOURCE_DIR}/koopmans/checkResponseSpeedups.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO})
+	set_tests_properties(koopmansResponseSpeedups PROPERTIES TIMEOUT 600)
+	if(EnableMPI AND MPIEXEC_EXECUTABLE)
+		add_test(NAME koopmansScreeningMeshMPI COMMAND ${Python3_EXECUTABLE}
+			${CMAKE_CURRENT_SOURCE_DIR}/koopmans/checkScreeningMesh.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO} --launcher ${MPIEXEC_EXECUTABLE})
+		set_tests_properties(koopmansScreeningMeshMPI PROPERTIES PROCESSORS 2 TIMEOUT 300)
+		add_test(NAME koopmansResponseSpeedupsMPI COMMAND ${Python3_EXECUTABLE}
+			${CMAKE_CURRENT_SOURCE_DIR}/koopmans/checkResponseSpeedups.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO}
+			--launcher ${MPIEXEC_EXECUTABLE})
+		set_tests_properties(koopmansResponseSpeedupsMPI PROPERTIES PROCESSORS 2 TIMEOUT 900)
+		add_test(NAME koopmansQGroupsMPI COMMAND ${Python3_EXECUTABLE}
+			${CMAKE_CURRENT_SOURCE_DIR}/koopmans/checkQGroups.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO} ${MPIEXEC_EXECUTABLE})
+		set_tests_properties(koopmansQGroupsMPI PROPERTIES PROCESSORS 4 TIMEOUT 600)
+		add_test(NAME koopmansKIMPI COMMAND ${Python3_EXECUTABLE}
+			${CMAKE_CURRENT_SOURCE_DIR}/koopmans/checkKI.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO} ${MPIEXEC_EXECUTABLE})
+		set_tests_properties(koopmansKIMPI PROPERTIES PROCESSORS 2 TIMEOUT 300)
+		add_test(NAME koopmansSpinKIMPI COMMAND ${Python3_EXECUTABLE}
+			${CMAKE_CURRENT_SOURCE_DIR}/koopmans/checkKI.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO} ${MPIEXEC_EXECUTABLE} --spin)
+		set_tests_properties(koopmansSpinKIMPI PROPERTIES PROCESSORS 2 TIMEOUT 300)
+		add_test(NAME koopmansSymmetryMPI COMMAND ${Python3_EXECUTABLE}
+			${CMAKE_CURRENT_SOURCE_DIR}/koopmans/checkSymmetry.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO} ${MPIEXEC_EXECUTABLE})
+		set_tests_properties(koopmansSymmetryMPI PROPERTIES PROCESSORS 2 TIMEOUT 300)
+		add_test(NAME koopmansReuseMPI COMMAND ${Python3_EXECUTABLE}
+			${CMAKE_CURRENT_SOURCE_DIR}/koopmans/checkReuse.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO} ${MPIEXEC_EXECUTABLE})
+		set_tests_properties(koopmansReuseMPI PROPERTIES PROCESSORS 2 TIMEOUT 300)
+		add_test(NAME koopmansOccupiedMPI COMMAND ${Python3_EXECUTABLE}
+			${CMAKE_CURRENT_SOURCE_DIR}/koopmans/checkOccupied.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO} ${MPIEXEC_EXECUTABLE})
+		set_tests_properties(koopmansOccupiedMPI PROPERTIES PROCESSORS 2 TIMEOUT 300)
+	endif()
 	add_test(NAME dfptElectronPhonon COMMAND ${Python3_EXECUTABLE}
 		${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkElectronPhonon.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_H_PSEUDO})
 	add_test(NAME dfptElectronPhononEmbeddedSlab COMMAND ${Python3_EXECUTABLE}
@@ -108,6 +206,15 @@ find_file(DFPT_SI_PSEUDO Si_ONCV_PBE.upf PATHS
     ${CMAKE_BINARY_DIR}/pseudopotentials/SG15
     "$ENV{JDFTX_PSEUDO_DIR}/SG15")
 if(Python3_Interpreter_FOUND AND NUMPY_STATUS EQUAL 0 AND DFPT_SI_PSEUDO)
+    add_test(NAME dfptElectronPhononSymmetry COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkElectronPhononSymmetry.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_SI_PSEUDO})
+    set_tests_properties(dfptElectronPhononSymmetry PROPERTIES TIMEOUT 1200)
+    if(EnableMPI AND MPIEXEC_EXECUTABLE)
+        add_test(NAME dfptElectronPhononSymmetryMPI COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkElectronPhononSymmetry.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_SI_PSEUDO}
+            --launcher ${MPIEXEC_EXECUTABLE} --rank-flag=${MPIEXEC_NUMPROC_FLAG})
+        set_tests_properties(dfptElectronPhononSymmetryMPI PROPERTIES PROCESSORS 3 TIMEOUT 1200)
+    endif()
     add_test(NAME dfptQSymmetry COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkQSymmetry.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_SI_PSEUDO})
     add_test(NAME dfptAcceleration COMMAND ${Python3_EXECUTABLE}
@@ -131,6 +238,15 @@ endif()
 find_file(DFPT_NB_PSEUDO Nb_ONCV_PBE.upf PATHS
     ${CMAKE_BINARY_DIR}/pseudopotentials/SG15 "$ENV{JDFTX_PSEUDO_DIR}/SG15")
 if(Python3_Interpreter_FOUND AND NUMPY_STATUS EQUAL 0 AND DFPT_NB_PSEUDO)
+    add_test(NAME dfptElectronPhononSymmetryNb COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkElectronPhononSymmetry.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_NB_PSEUDO} --species Nb)
+    set_tests_properties(dfptElectronPhononSymmetryNb PROPERTIES TIMEOUT 1200)
+    if(EnableMPI AND MPIEXEC_EXECUTABLE)
+        add_test(NAME dfptElectronPhononSymmetryNbMPI COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkElectronPhononSymmetry.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_NB_PSEUDO}
+            --species Nb --launcher ${MPIEXEC_EXECUTABLE} --rank-flag=${MPIEXEC_NUMPROC_FLAG})
+        set_tests_properties(dfptElectronPhononSymmetryNbMPI PROPERTIES PROCESSORS 3 TIMEOUT 1200)
+    endif()
     add_test(NAME dfptFrozenCacheNb COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkFrozenCache.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_NB_PSEUDO} --species Nb)
     set_tests_properties(dfptFrozenCacheNb PROPERTIES TIMEOUT 300)
@@ -161,6 +277,10 @@ endif()
 find_file(DFPT_B_PSEUDO B_ONCV_PBE.upf PATHS ${CMAKE_BINARY_DIR}/pseudopotentials/SG15 "$ENV{JDFTX_PSEUDO_DIR}/SG15")
 find_file(DFPT_N_PSEUDO N_ONCV_PBE.upf PATHS ${CMAKE_BINARY_DIR}/pseudopotentials/SG15 "$ENV{JDFTX_PSEUDO_DIR}/SG15")
 if(Python3_Interpreter_FOUND AND NUMPY_STATUS EQUAL 0 AND DFPT_B_PSEUDO AND DFPT_N_PSEUDO)
+    add_test(NAME dfptElectronPhononSymmetryRotations COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkElectronPhononSymmetry.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_B_PSEUDO}
+        --species BN --nitrogen ${DFPT_N_PSEUDO})
+    set_tests_properties(dfptElectronPhononSymmetryRotations PROPERTIES TIMEOUT 300)
     add_test(NAME dfptDisplacementRotations COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkDisplacementRotations.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_B_PSEUDO} ${DFPT_N_PSEUDO})
     set_tests_properties(dfptDisplacementRotations PROPERTIES TIMEOUT 150)
