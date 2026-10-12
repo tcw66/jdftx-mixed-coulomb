@@ -1,0 +1,20 @@
+include common.in
+wannier-initial-state state/scf.$VAR
+wannier-dump-name results/conduction.$VAR
+# Localize empty bands separately so occupied/empty states never mix.
+wannier \
+    loadRotations yes \
+    innerWindow 0.239616 0.5 \
+    outerWindow 0.239616 1.5 \
+    numericalOrbitals state/conduction-seed.mlwfC
+
+wannier-center Numerical 0
+wannier-center Numerical 1
+wannier-center Numerical 2
+wannier-center Numerical 3
+wannier-center Numerical 4
+wannier-center Numerical 5
+
+wannier-minimize nIterations 300 knormThreshold 1e-8
+
+include ki-response.in

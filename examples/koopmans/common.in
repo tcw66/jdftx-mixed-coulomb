@@ -1,0 +1,4 @@
+include model.in
+# Uniform mesh for the ground state and KI response, with fixed occupations.
+kpoint-folding 8 8 8
+electronic-scf nIterations 200 nEigSteps 40 residualThreshold 1e-10

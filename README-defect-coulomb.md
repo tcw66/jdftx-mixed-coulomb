@@ -158,7 +158,7 @@ export SRCDIR=../../../jdftx/test/defectCoulomb
 For MPI, set `JDFTX_LAUNCH='mpirun -n 2'` before rerunning the integration test.
 GPU builds use the same field operators; enable CUDA and build `jdftx_gpu` and
 `TestDefectCoulomb_gpu`. For the RTX 4090s in this workspace, the GPU build is
-configured in `build-gpu` with CUDA architecture 89.
+configured in the shared `build/` with CUDA architecture 89.
 
 The main implementation is in `jdftx/electronic/DefectCoulomb.{h,cpp}`, with input
 handling in `jdftx/commands/defect_coulomb.cpp` and integration into `ElecVars`,
@@ -258,8 +258,8 @@ CPU and GPU backends have been built in this workspace; to rebuild:
 cmake -S jdftx -B build
 cmake --build build --target ConstructDefectPotential
 # For an already CUDA-configured build:
-cmake -S jdftx -B build-gpu
-cmake --build build-gpu --target ConstructDefectPotential_gpu
+cmake --preset gpu -S jdftx
+cmake --build build --target ConstructDefectPotential_gpu
 ```
 
 The potential is evaluated at the supplied defect density. If that density came

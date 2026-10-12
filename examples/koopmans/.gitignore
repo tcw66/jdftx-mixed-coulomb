@@ -1,0 +1,6 @@
+archive/
+state/
+results/
+logs/
+.run.lock
+__pycache__/

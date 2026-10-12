@@ -1,0 +1,12 @@
+# Silicon PBE model shared by the SCF, Wannier and band-path calculations.
+lattice face-centered Cubic 10.26
+coords-type lattice
+ion-species SG15/$ID_ONCV_PBE.upf
+ion Si 0 0 0 1
+ion Si 0.25 0.25 0.25 1
+spintype no-spin
+elec-ex-corr gga-PBE
+elec-cutoff 30
+elec-n-bands 60
+converge-empty-states yes
+electronic-minimize nIterations 300 energyDiffThreshold 1e-12

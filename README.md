@@ -12,6 +12,46 @@ phonon/Wannier format. DFPT supports periodic and slab Coulomb, including slab
 embedding, for phonons and electron–phonon coupling. These capabilities
 run through `jdftx` or `jdftx_gpu` and use the primitive-cell electronic FFT grid.
 
+The shared local `build/` contains CPU executables (`jdftx`, `wannier`,
+`phonon`) and GPU executables with the `_gpu` suffix. It includes the DFPT
+solver, memory and electron–phonon export optimizations. From `jdftx/`, run
+`cmake --preset unified` and `cmake --build --preset unified`. The `cpu` and
+`gpu` build presets select targets from that same configuration; both
+configure presets keep CUDA enabled so switching targets preserves GPU support.
+The configuration uses Release mode, MPI, disabled profiling, CUDA 12 and
+architecture 89 on this machine. Source `default-env.sh` from the repository
+root to select these executables. `build-gpu` is a compatibility symlink to
+`build/`. Previous configurations, runtimes and diagnostic results are saved
+in `archive/build-cleanup-20261012/`.
+
+## KI and original PBE band comparison
+
+The [silicon Koopmans example](examples/koopmans/README.md) uses separate
+valence and conduction KI runs with a spin-unpolarized PBE ground state.
+Once both runs finish, regenerate their band comparison from the repository
+root:
+
+```bash
+python3 examples/koopmans/plot_separate_bands.py
+```
+
+The plotter reads `examples/koopmans/results/{valence,conduction}.*` and
+recovers the original projected PBE Hamiltonians as `mlwfHki - mlwfKI`,
+preserving complex hoppings. It overlays KI and PBE on the same axes with a
+common energy zero; no additional PBE calculation is needed. PNG/PDF plots,
+a band table, and a JSON gap report are saved in the example's `results/`.
+
+Each plot labels the sampled path gaps and interpolated Brillouin-zone gaps.
+The latter use a 16×16×16 search mesh plus the path, followed by local
+refinement from multiple starting points. Use `--gap-mesh 24 24 24` to check
+search convergence; `--fold NX NY NZ`, `--valence PREFIX`, `--conduction PREFIX`
+and `--output-dir DIRECTORY` select other completed runs. The underlying
+Wannier localization and disentanglement also need convergence. NumPy,
+SciPy and Matplotlib are required. Incomplete runs are rejected before plots
+are written.
+
+## Mixed Coulomb features
+
 The mixed Coulomb implementation includes:
 
 - A variational correction to the electronic SCF potential and energy, using
@@ -106,7 +146,7 @@ For example, from the repository root:
 ./examples/dfpt-silicon/run.sh --reduced-scf --out examples/dfpt-silicon/results-new
 ```
 
-The silicon runner accepts `--jdftx-bin ./build-gpu/jdftx_gpu`, `--pseudo`,
+The silicon runner accepts `--jdftx-bin ./build/jdftx_gpu`, `--pseudo`,
 `--kgrid`, `--qgrid`, `--launcher`, and `--q-groups` overrides. Python 3 and
 NumPy are required for interpolation; Matplotlib is needed for plots. Example
 parameters are starting values for convergence studies.
@@ -373,7 +413,7 @@ Run the existing Wannier executable from the calculation directory:
 
 ```bash
 /path/to/build/wannier -i wannier.in -o wannier.out
-# Or /path/to/build-gpu/wannier_gpu for CUDA.
+# Or /path/to/build/wannier_gpu for CUDA.
 ```
 
 Wannier reads `phononHsub` and `phononBasis`, applies its usual translational
@@ -392,8 +432,12 @@ conventions, normalization and supported features.
 Install the normal JDFTx dependencies (C++ compiler, CMake, GSL, FFTW,
 BLAS/LAPACK, and MPI for the default configuration), then build from this root:
 
+The local presets build CPU and GPU targets together and also require CUDA
+12 at `/usr/local/cuda-12`. For a CPU-only installation without CUDA, use
+`cmake -S jdftx -B build -DEnableCUDA=OFF` instead of the preset below.
+
 ```bash
-cmake -S jdftx -B build
+cmake --preset cpu -S jdftx
 cmake --build build --parallel --target jdftx wannier phonon \
     ConstructDefectPotential TestDefectCoulomb
 ```
@@ -413,12 +457,12 @@ cmake --build build --parallel --target TestDFPT
 To configure and build the GPU versions, install CUDA and use:
 
 ```bash
-cmake -S jdftx -B build-gpu -DEnableCUDA=ON -DEnableMPI=ON
-cmake --build build-gpu --parallel --target jdftx_gpu wannier_gpu phonon_gpu \
+cmake --preset gpu -S jdftx
+cmake --build build --parallel --target jdftx_gpu wannier_gpu phonon_gpu \
     ConstructDefectPotential_gpu TestDefectCoulomb_gpu
 ```
 
-The existing `build-gpu` in this workspace uses CUDA architecture 89 for the
+The shared `build` in this workspace uses CUDA architecture 89 for the
 RTX 4090 GPUs. Set `CMAKE_CUDA_ARCHITECTURES` for the target hardware when
 configuring a different machine. The DFPT phonon and electron–phonon commands
 are part of the main `jdftx`/`jdftx_gpu` executable; no separate phonon executable

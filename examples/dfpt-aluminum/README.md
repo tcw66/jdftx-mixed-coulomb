@@ -3,8 +3,8 @@
 Run from this directory with the rebuilt CPU or GPU executable:
 
 ```bash
-../../build-gpu/jdftx_gpu -i 01-scf.in -o scf.out
-../../build-gpu/jdftx_gpu -i 02-dfpt.in -o dfpt.out
+../../build/jdftx_gpu -i 01-scf.in -o scf.out
+../../build/jdftx_gpu -i 02-dfpt.in -o dfpt.out
 ```
 
 The SCF uses symmetry; DFPT unfolds its checkpoint onto the full electronic k
@@ -24,7 +24,7 @@ pseudopotential path in `common.in` if using a different installation.
 
 To distribute independent q points, add `phonon-dfpt-q-groups 2` to `02-dfpt.in`
 and launch with at least two MPI ranks, for example
-`mpirun -n 2 ../../build-gpu/jdftx_gpu -i 02-dfpt.in -o dfpt.out`.
+`mpirun -n 2 ../../build/jdftx_gpu -i 02-dfpt.in -o dfpt.out`.
 
 Interpolate the resulting matrices with `../../jdftx/scripts/phononDFPT`, using
 a q-path file in fractional reciprocal coordinates:

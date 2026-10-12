@@ -1,0 +1,4 @@
+# Full screening q mesh by default. For a convergence comparison, uncomment:
+# wannier-koopmans-screening-mesh 4 4 4
+# Each dimension must divide common.in's kpoint-folding. The k integration,
+# orbital sources, bare KI Hamiltonian and output bands keep the full mesh.

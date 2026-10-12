@@ -1,6 +1,8 @@
 # Out-of-source builds and local analysis outputs
 /build/
 /build-*/
+/build-gpu
+/archive/build-cleanup-*/
 __pycache__/
 *.py[cod]
 .ipynb_checkpoints/

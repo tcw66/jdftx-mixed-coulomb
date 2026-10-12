@@ -1,0 +1,3 @@
+include common.in
+dump-name state/scf.$VAR
+dump End State BandEigs EigStats ElecDensity Vscloc

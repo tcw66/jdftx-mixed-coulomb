@@ -1,0 +1,25 @@
+include common.in
+wannier-initial-state state/scf.$VAR
+wannier-dump-name results/valence.$VAR
+
+# Four occupied bands only. Reuse matching results/valence checkpoints;
+# absent checkpoints fall back to the Gaussian trial orbitals below.
+# KI Hamiltonians do not require the optional numerical-wavefunction export.
+wannier \
+    bStart 0 \
+    loadRotations yes \
+    saveWfns no \
+    localizationMeasure FiniteDifference
+
+wannier-center Gaussian 0.125 0.125 0.125
+wannier-center Gaussian 0.625 0.125 0.125
+wannier-center Gaussian 0.125 0.625 0.125
+wannier-center Gaussian 0.125 0.125 0.625
+
+# Preserve the existing localization limits and accuracy thresholds.
+wannier-minimize \
+    nIterations 300 \
+    energyDiffThreshold 1e-8 \
+    knormThreshold 1e-8
+
+include ki-response.in

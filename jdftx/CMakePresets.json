@@ -1,0 +1,29 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "unified",
+      "displayName": "Optimized CPU and GPU build",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/../build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "EnableMPI": "ON",
+        "EnableProfiling": "OFF",
+        "EnableCUDA": "ON",
+        "EnableCuSolver": "OFF",
+        "CMAKE_CUDA_COMPILER": "/usr/local/cuda-12/bin/nvcc",
+        "CUDAToolkit_ROOT": "/usr/local/cuda-12",
+        "CMAKE_CUDA_ARCHITECTURES": "89"
+      }
+    },
+    { "name": "cpu", "inherits": "unified", "displayName": "Shared build for CPU targets" },
+    { "name": "gpu", "inherits": "unified", "displayName": "Shared build for GPU targets" }
+  ],
+  "buildPresets": [
+    { "name": "unified", "configurePreset": "unified", "targets": ["jdftx", "phonon", "wannier", "jdftx_gpu", "phonon_gpu", "wannier_gpu"], "jobs": 4 },
+    { "name": "cpu", "configurePreset": "cpu", "targets": ["jdftx", "phonon", "wannier"], "jobs": 4 },
+    { "name": "gpu", "configurePreset": "gpu", "targets": ["jdftx_gpu", "phonon_gpu", "wannier_gpu"], "jobs": 4 }
+  ]
+}

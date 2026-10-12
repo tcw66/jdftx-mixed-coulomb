@@ -8,7 +8,7 @@ Run from this directory:
 ../../build/wannier -i 03-wannier.in -o wannier.out
 ```
 
-Use `../../build-gpu/jdftx_gpu` and `wannier_gpu` for GPU runs.
+Use `../../build/jdftx_gpu` and `wannier_gpu` for GPU runs.
 The example creates a fresh symmetry-reduced SCF checkpoint with 12 bands,
 including conduction states. Existing four-band silicon checkpoints cannot
 supply these extra bands. DFPT unfolds the checkpoint and integrates the

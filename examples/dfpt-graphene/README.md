@@ -12,7 +12,7 @@ From this directory, run SCF before DFPT:
 mpirun -n 4 ../../build/jdftx -i dfpt.in -o dfpt.out
 ```
 
-For GPU runs, replace the executable with `../../build-gpu/jdftx_gpu`.
+For GPU runs, replace the executable with `../../build/jdftx_gpu`.
 `dfpt.in` uses two MPI q groups, so launch with at least two ranks; set
 `phonon-dfpt-q-groups 1` for a serial run. The nested solver and offset reuse
 are enabled. Electron–phonon export computes every q and Cartesian displacement

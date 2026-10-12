@@ -1,0 +1,8 @@
+# Use the same no-spin model and fixed SCF potential on the band path.
+# The path is sampled directly, with no ground-state kpoint folding or SCF.
+include model.in
+kpoint-folding 1 1 1
+include paths/bandstruct.kpoints
+fix-electron-potential state/scf.$VAR
+dump-name results/bandstruct.$VAR
+dump End BandEigs

@@ -1,0 +1,26 @@
+# Read the same electronic model without inheriting the SCF dump commands.
+include common.in
+
+# Reuse the saved rotations and finite-difference overlaps when available.
+wannier-initial-state state/scf.$VAR
+wannier-dump-name state/conduction-seed.$VAR
+
+wannier \
+    innerWindow +0.239616 0.5 \
+    outerWindow +0.239616 1.5 \
+    loadRotations no \
+    saveWfns yes \
+    localizationMeasure FiniteDifference
+
+# Stop at a stationary solution as well as at the existing spread tolerance.
+wannier-minimize \
+    nIterations 500 \
+    energyDiffThreshold 1e-10 \
+    knormThreshold 1e-8
+
+wannier-center Gaussian 0.4522644082526898 0.2845886242871388 0.9702752061410737
+wannier-center Gaussian 0.4052738661717559 0.8503308253343784 0.6955133755700399
+wannier-center Gaussian 0.1450551568734844 0.0843611133865415 0.0406919552961695
+wannier-center Gaussian 0.8543368903267129 0.2957611926845787 0.8898547239502373
+wannier-center Gaussian 0.6964143095992519 0.9903233207190787 0.0911094319225658
+wannier-center Gaussian 0.9229294979253888 0.0585872710017817 0.4232915921198837
