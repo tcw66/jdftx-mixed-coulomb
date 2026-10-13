@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Independent supercell finite-difference validation of native KI(2).
-Usage: checkKI.py BUILD_DIR H_NORM_CONSERVING_UPF [MPIEXEC] [--spin]
-Checks LDA kernel/curvature, screened curvature against independently relaxed
+Usage: checkKI.py BUILD_DIR H_NORM_CONSERVING_UPF [MPIEXEC] [--spin] [--gga]
+Checks LDA/PBE kernel/curvature, screened curvature against independently relaxed
 SCF densities, valence/conduction shifts, q wrapping, Ewald scaling, and MPI.
 """
 from pathlib import Path
@@ -15,7 +15,8 @@ import numpy as np
 build = Path(sys.argv[1]).resolve()
 pseudo = Path(sys.argv[2]).resolve()
 spin = '--spin' in sys.argv[3:]
-launcher = next((arg for arg in sys.argv[3:] if arg != '--spin'), None)
+gga = '--gga' in sys.argv[3:]
+launcher = next((arg for arg in sys.argv[3:] if arg not in ('--spin', '--gga')), None)
 env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
 
 
@@ -66,7 +67,7 @@ symmetries none
 kpoint-reduce-inversion no
 core-overlap-check none
 elec-cutoff 6
-elec-ex-corr lda-PZ
+elec-ex-corr {'gga-PBE' if gga else 'lda-PZ'}
 converge-empty-states yes
 electronic-scf nIterations 200 nEigSteps 40 energyDiffThreshold 1e-13 residualThreshold 1e-10
 electronic-minimize nIterations 300 energyDiffThreshold 1e-13
@@ -132,8 +133,34 @@ electronic-minimize nIterations 300 energyDiffThreshold 1e-13
                 density = sum(np.fromfile(supercell/f'scf.n_{s}', dtype=np.float64).reshape(shape) for s in ('up', 'dn'))
             else:
                 density = np.fromfile(supercell/'scf.n', dtype=np.float64).reshape(shape)
-            charge = kernel(density, rho, (8, 8, 8*fold))
-            magnetic = magnetic_kernel(density, rho) if spin else np.zeros_like(charge)
+            if gga:
+                # Independent finite differences of the full native Hxc
+                # potential, without using the DFPT Hessian implementation.
+                fixed = re.sub(r'^electronic-scf .*\n', '', common, flags=re.M)
+                fixed = re.sub(r'^electronic-minimize .*\n',
+                               'electronic-minimize nIterations 0\n', fixed, flags=re.M)
+                potentials = []
+                step = 1e-6
+                for sign in (-1, 1):
+                    folder = root/f'kernel-{fold}-{label}-{sign}'
+                    folder.mkdir()
+                    if spin:
+                        (.5*density+sign*step*rho).astype(np.float64).tofile(folder/'fixed.n_up')
+                        (.5*density).astype(np.float64).tofile(folder/'fixed.n_dn')
+                    else:
+                        (density+sign*step*rho).astype(np.float64).tofile(folder/'fixed.n')
+                    run(folder, 'jdftx', fixed+super_geometry+spin_input
+                        +'fix-electron-density fixed.$VAR\ndump-name kernel.$VAR\ndump End Vscloc\n')
+                    names = ('Vscloc_up', 'Vscloc_dn') if spin else ('Vscloc',)
+                    # Vscloc stores the grid-weighted potential JdagOJ V.
+                    potentials.append([np.fromfile(folder/('kernel.'+s), dtype=np.float64).reshape(shape)/dv
+                                       for s in names])
+                up = (potentials[1][0]-potentials[0][0])/(2*step)
+                down = (potentials[1][1]-potentials[0][1])/(2*step) if spin else up
+                charge, magnetic = .5*(up+down), .5*(up-down)
+            else:
+                charge = kernel(density, rho, (8, 8, 8*fold))
+                magnetic = magnetic_kernel(density, rho) if spin else np.zeros_like(charge)
             potential = charge+magnetic
             bare = dv*np.sum(rho*potential)
             np.testing.assert_allclose(screen[2], bare, atol=2e-6, rtol=2e-5)

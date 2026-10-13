@@ -1,6 +1,6 @@
 # One-electron KI sources with charge and magnetic response about a no-spin
 # ground state. This does not make the ground state spin polarized.
-wannier-koopmans 0 400 1e-7 yes 1e-6 yes 2 yes
+wannier-koopmans 0 400 1e-7 yes 1e-4 yes 2 yes
 wannier-koopmans-spin yes
 # Set yes to print k-point/basis listings and every response iteration.
 wannier-koopmans-verbose no

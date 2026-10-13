@@ -83,7 +83,12 @@ public:
 	bool koopmans = false; //!< one-shot second-order KI spectral Hamiltonian
 	bool koopmansSpinResponse = true; //!< Screen a single spin orbital, including magnetization response
 	bool koopmansVerbose = false; //!< Print per-k-point, per-pair and solver-iteration details
-	vector3<int> koopmansScreeningMesh = vector3<int>(0,0,0); //!< Optional coarse q mesh for alpha; zero uses the full Wannier mesh
+	vector3<int> koopmansScreeningMesh = vector3<int>(0,0,0); //!< Initial screening q mesh; zero uses the full Wannier mesh
+	double koopmansScreeningEnergyTolerance = 0.005; //!< eV tolerance for adaptive screening; zero selects fixed-mesh diagnostics
+	string koopmansReferenceDensity; //!< Optional fixed SCF density for NSCF-based KI
+	string koopmansAlphaFilename; //!< Imported orbital screening coefficients for Hamiltonian-only postprocessing
+	bool koopmansSaveDensities = false; //!< Export periodic orbital densities for matching separate grids
+	bool koopmansScreeningOnly = false; //!< Compute curvatures/alphas without constructing a KI Hamiltonian
 	double koopmansEpsilon = 0.; //!< isotropic epsilon infinity for Ewald correction; zero disables correction
 	int koopmansIterations = 300;
 	double koopmansTolerance = 1e-7;

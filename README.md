@@ -19,6 +19,7 @@ in the relevant sections.
 
 - [Build](#build)
 - [KI and original PBE band comparison](#ki-and-original-pbe-band-comparison)
+  - [Coarse-grid screening workflow](#coarse-grid-screening-workflow)
   - [KI input reference](#ki-input-reference)
 - [Mixed Coulomb features](#mixed-coulomb-features)
   - [Mixed Coulomb input reference](#mixed-coulomb-input-reference)
@@ -59,6 +60,10 @@ in the relevant sections.
 | [`wannier-koopmans`](#wannier-koopmans) | `wannier` / `wannier_gpu` |
 | [`wannier-koopmans-response`](#wannier-koopmans-response) | `wannier` / `wannier_gpu` |
 | [`wannier-koopmans-screening-mesh`](#wannier-koopmans-screening-mesh) | `wannier` / `wannier_gpu` |
+| [`wannier-koopmans-reference-density`](#wannier-koopmans-reference-density) | `wannier` / `wannier_gpu` |
+| [`wannier-koopmans-screening-only`](#wannier-koopmans-screening-only) | `wannier` / `wannier_gpu` |
+| [`wannier-koopmans-alpha-file`](#wannier-koopmans-alpha-file) | `wannier` / `wannier_gpu` |
+| [`wannier-koopmans-save-densities`](#wannier-koopmans-save-densities) | `wannier` / `wannier_gpu` |
 | [`wannier-koopmans-spin`](#wannier-koopmans-spin) | `wannier` / `wannier_gpu` |
 | [`wannier-koopmans-verbose`](#wannier-koopmans-verbose) | `wannier` / `wannier_gpu` |
 
@@ -190,6 +195,59 @@ projector caches, mesh correlations, occupied-state response, symmetry reuse,
 solver agreement, coarse screening and MPI q groups. Run them with
 `ctest --test-dir build -R '^(koopmans|projectorCache|kMeshCorrelation|batchedProjectors)' --output-on-failure`.
 
+### Coarse-grid screening workflow
+
+The separate-grid launcher follows the official Koopmans KI(2)/DFPT workflow:
+retain the fine-grid SCF density, solve NSCF states on a coarse electronic
+mesh, localize coarse Wannier orbitals, calculate screening on the full coarse
+k/q mesh, and transfer matched orbital coefficients to the fine-grid
+Hamiltonian. The fine Hamiltonian stage performs no DFPT screening solves.
+
+First complete the fine SCF and both valence/conduction localizations using
+the [silicon inputs](examples/koopmans/README.md). The source directory must
+contain the matching SCF `wfns`, `eigenvals` and `n` files, each manifold's
+`mlwfU`, `mlwfM0` and `mlwfState`, its input files, and any numerical trials.
+Then run from the repository root:
+
+```bash
+python3 examples/koopmans/run_coarse_screening.py \
+  --example-dir /path/to/completed-silicon \
+  --coarse-grid 4 4 4 --cpu --ranks 2 --threads 2 \
+  --directory /path/to/coarse-4-run --plot
+```
+
+Use a new output directory. Omit `--cpu` to select CUDA. NumPy and SciPy are
+required; plotting also requires Matplotlib. The launcher defaults to the
+executables in `build/`; `JDFTX_BINARY`, `WANNIER_BINARY` and `MPIEXEC` override
+the executables and MPI launcher. The fine grid is read from `common.in`;
+coarse dimensions need not divide it.
+
+`--prepare-only` writes inputs without native calculations. To continue a
+prepared or interrupted run, repeat the command with `--resume`; reuse is
+validated against input, checkpoint, executable, library and product hashes.
+`--stop-after nscf|wannier|screening|hamiltonian` selects the final stage.
+Epsilon is inherited from the source KI input, or overridden with
+`--epsilon-infinity VALUE` at both grids. A nonzero value must come from the
+same functional/pseudopotential model. With epsilon=0, check mesh convergence
+of charged-orbital screening carefully.
+
+Outputs are separated into `coarse/` screening and `fine/` Hamiltonians.
+`fine/*.alpha.mapping.json` records the orbital correspondence; `logs/`
+contains stage logs and `stages.json` records validated stages. With `--plot`,
+`fine/koopmans-bands-comparison.{png,pdf,dat,json}` contains the band comparison
+and gap search. Source checkpoints are preserved. Poor localization or
+ambiguous orbital matching stops the workflow instead of transferring
+unverified coefficients.
+
+This differs from `wannier-koopmans-screening-mesh`, which refines a q subset
+while retaining fine electronic states and orbitals. It also remains KI(2),
+whereas the official silicon supercell tutorial uses full KI/ΔSCF. The
+completed PBE/SG15 4³→8³ run gives 1.652170 eV at epsilon=0 with positive empty
+alphas; that is not a converged literature-gap claim. An additional PBE
+empty-state comparison against QE remains unresolved. See the
+[workflow report](examples/koopmans/official-coarse-workflow.md) for source
+references, validation and limitations.
+
 ### KI input reference
 
 All commands below belong in a Wannier input. `yes` and `no` are literal
@@ -198,7 +256,8 @@ boolean values. Arguments to `wannier-koopmans` and
 trailing arguments uses native defaults; to change a later argument, supply
 all earlier arguments. The angle brackets below name arguments and are not
 part of a runnable input. The ancillary `wannier-koopmans-*` commands require
-`wannier-koopmans` to be present.
+`wannier-koopmans` to be present, except `wannier-koopmans-save-densities`,
+which can export densities from localization alone.
 
 The supported ground state is a nonmagnetic insulator (`spintype no-spin`)
 with fixed integer occupations, nonrelativistic norm-conserving pseudopotentials,
@@ -303,7 +362,7 @@ Symmetry-reused responses and source-only audits do not print solve timings.
 #### `wannier-koopmans-screening-mesh`
 
 ```text
-wannier-koopmans-screening-mesh <nq0> <nq1> <nq2>
+wannier-koopmans-screening-mesh <nq0> <nq1> <nq2> [<energyTolerance_eV>=0.005]
 ```
 
 All three dimensions are required positive integers. Each must divide the
@@ -315,8 +374,12 @@ The implementation samples a Gamma-centered subset of q points and uses
 properly normalized quadrature weights for the bare/relaxed curvature ratio
 that determines `alpha`. Electronic k integration, orbital sources, the bare
 spectral Hamiltonian and band interpolation retain the full 8×8×8 mesh.
-This is an approximation to screening and needs convergence against a finer
-screening mesh.
+The requested q mesh is the initial adaptive mesh. Responses are reused
+as it grows; refinement stops after two successive KI Hamiltonian changes
+below `energyTolerance_eV` (default 0.005 eV), or at the full mesh. This is
+a change-between-mesh criterion, not a rigorous error bound. A fourth
+argument of `0` requests a fixed q-mesh diagnostic. This q-only approximation
+is distinct from the separate coarse electronic-grid workflow above.
 
 In `examples/koopmans/ki-screening-mesh.in`, the line below is **commented out**, so coarse
 screening is currently disabled:
@@ -329,6 +392,52 @@ Remove the leading `#` to enable it for the next native launch. Editing an
 input does not change a running process. Gamma-only screening (`1 1 1`) is
 useful for a diagnostic comparison; a source-symmetry check at Gamma does not validate
 it as a production gap approximation.
+
+#### `wannier-koopmans-reference-density`
+
+```text
+wannier-koopmans-reference-density <filename>
+```
+
+Read the raw fine SCF `.n` density for KI potentials and the XC kernel instead
+of reconstructing it from loaded NSCF wavefunctions. The reference must match
+the model, electron count and FFT grid. This preserves the fine SCF reference
+when screening uses coarse NSCF states.
+
+#### `wannier-koopmans-screening-only`
+
+```text
+wannier-koopmans-screening-only [yes]
+```
+
+Calculate coefficients and response diagnostics without the corrected
+spectral Hamiltonian. Requires KI; incompatible with an alpha file or a
+screening-mesh override. Use the full k/q mesh of the coarse electronic model.
+
+#### `wannier-koopmans-alpha-file`
+
+```text
+wannier-koopmans-alpha-file <filename>
+```
+
+Read a complete `koopmansScreening` table in target orbital order and build
+the Hamiltonian without screening response solves. KI(2), spin, epsilon and
+occupations must match. The donor must have equal electronic k and screening
+q meshes; old q-only tables are rejected. The launcher validates model and
+orbital correspondence before import. Incompatible with screening-only or a
+screening-mesh override. Coefficients are not clipped or fitted.
+
+#### `wannier-koopmans-save-densities`
+
+```text
+wannier-koopmans-save-densities [yes]
+```
+
+Export Gamma-periodic orbital densities as float64
+`koopmansOrbitalDensities` with grid/lattice metadata in
+`koopmansDensityFormat`. Requires Wannier localization and a nonmagnetic
+ground state; does not require KI. The launcher uses these densities to match
+fine and coarse orbitals.
 
 #### `wannier-koopmans-response`
 
@@ -360,7 +469,8 @@ paths or reduces reuse rather than changing the physical equations. Nested
 mode can be used without operator optimization. The coupled default was faster than the tested nested alternatives on the
 small fixed-orbital valence benchmark; compare the solvers for the intended
 material and mesh. `wannier-koopmans-response` does not enable coarse screening: use
-`wannier-koopmans-screening-mesh` explicitly for that approximation.
+the separate-grid launcher for coarse electronic screening, or
+`wannier-koopmans-screening-mesh` for adaptive q-only integration.
 
 ## Mixed Coulomb features
 

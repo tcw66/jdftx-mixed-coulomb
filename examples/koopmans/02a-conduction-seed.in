@@ -12,11 +12,12 @@ wannier \
     saveWfns yes \
     localizationMeasure FiniteDifference
 
-# Stop at a stationary solution as well as at the existing spread tolerance.
+# Require both convergence criteria; a spread-only stop can break KI symmetry.
 wannier-minimize \
-    nIterations 500 \
-    energyDiffThreshold 1e-10 \
-    knormThreshold 1e-8
+    nIterations 600 \
+    energyDiffThreshold 1e-14 \
+    knormThreshold 1e-8 \
+    convergeAll yes
 
 wannier-center Gaussian 0.4522644082526898 0.2845886242871388 0.9702752061410737
 wannier-center Gaussian 0.4052738661717559 0.8503308253343784 0.6955133755700399

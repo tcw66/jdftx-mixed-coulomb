@@ -7,8 +7,12 @@
 #include <perturb/PerturbationSolver.h>
 #include <electronic/ColumnBundleFFT.h>
 #include <electronic/KMeshCorrelation.h>
+#include <core/Units.h>
+#include <core/ScalarFieldIO.h>
 #include <algorithm>
 #include <numeric>
+#include <fstream>
+#include <sstream>
 
 namespace
 {
@@ -302,9 +306,9 @@ public:
 		reused++;
 		return true;
 	}
-	void record(const complexScalarField& rho, int orbital, double occupation, int iq, double bare, double response)
+	void record(const complexScalarField& rho, int orbital, double occupation, int iq, double bare, double response, bool countSolve=true)
 	{
-		solved++;
+		if(countSolve) solved++;
 		if(!enabled || !mpiWorld->isHead()) return;
 		size_t bytes=size_t(e.gInfo.nr)*sizeof(complex);
 		if(cacheBytes+bytes>cacheLimit) return; // Bounded memory; uncached pairs are solved normally.
@@ -438,6 +442,39 @@ FILE* openOutput(const string& name)
 }
 }
 
+void WannierMinimizer::saveMLWF_KI_densities(int iSpin)
+{
+	if(e.eInfo.spinType!=SpinNone) die("wannier-koopmans-save-densities requires spintype no-spin.\n");
+	Everything& system=const_cast<Everything&>(e);
+	std::vector<ScalarField> densities(nCenters);
+	for(auto& density:densities) { nullToZero(density,e.gInfo); initZero(density); }
+	Cother.resize(e.eInfo.nStates);
+	for(const auto& ke:kMesh) {
+		int state=ke.point.iReduced, owner=e.eInfo.whose(state);
+		ColumnBundle received;
+		ColumnBundle& source=e.eInfo.isMine(state) ? system.eVars.C[state] : received;
+		if(!e.eInfo.isMine(state)) source.init(nBands,e.basis[state].nbasis,&e.basis[state],&e.eInfo.qnums[state],isGpuEnabled());
+		mpiWorld->bcastData(source,owner);
+		if(!e.eInfo.isMine(state)) Cother[state]=source;
+		ColumnBundle localized=getWfns(ke.point,iSpin)*ke.U;
+		for(int n=0;n<nCenters;n++) {
+			auto u=changeGrid(I(localized.getColumn(n,0)),e.gInfo);
+			densities[n]+=ke.point.weight*Real(conj(u)*u);
+		}
+		if(!e.eInfo.isMine(state)) Cother[state].free();
+	}
+	Cother.clear();
+	if(mpiWorld->isHead()) {
+		FILE* output=openOutput(wannier.getFilename(Wannier::FilenameDump,"koopmansOrbitalDensities",&iSpin));
+		for(const auto& density:densities) saveRawBinary(density,output);
+		fclose(output);
+		FILE* format=openOutput(wannier.getFilename(Wannier::FilenameDump,"koopmansDensityFormat",&iSpin));
+		fprintf(format,"float64 %d %d %d %d %d\n",nCenters,e.gInfo.nr,e.gInfo.S[0],e.gInfo.S[1],e.gInfo.S[2]);
+		for(int i=0;i<3;i++) for(int j=0;j<3;j++) fprintf(format,"%.15g%c",e.gInfo.R(i,j),j==2 ? '\n' : ' ');
+		fclose(format);
+	}
+}
+
 void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 {
 	const char* auditSetting=getenv("JDFTX_KI_SYMMETRY_AUDIT");
@@ -468,7 +505,23 @@ void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 	p.solverParams.logIterations=wannier.koopmansVerbose;
 
 	// Reconstruct the frozen DFT density/potential. This does not rotate C.
-	system.eVars.elecEnergyAndGrad(system.ener, nullptr, nullptr, true);
+	if(wannier.koopmansReferenceDensity.empty())
+		system.eVars.elecEnergyAndGrad(system.ener, nullptr, nullptr, true);
+	else {
+		logPrintf("KI reference density: '%s'; retain SCF density for NSCF response states.\n",wannier.koopmansReferenceDensity.c_str());
+		system.eVars.n.resize(1); nullToZero(system.eVars.n[0],e.gInfo);
+		loadRawBinary(system.eVars.n[0],wannier.koopmansReferenceDensity.c_str());
+		double electrons=integral(system.eVars.n[0]);
+		if(!std::isfinite(electrons) || fabs(electrons-e.eInfo.nElectrons)>1e-6*std::max(1.,e.eInfo.nElectrons))
+			die("KI reference density has an inconsistent electron count.\n");
+		Energies referenceEnergy=system.ener;
+		referenceEnergy.E["KE"]=0.; referenceEnergy.E["Enl"]=0.;
+		system.eVars.EdensityAndVscloc(referenceEnergy);
+		for(int state=e.eInfo.qStart;state<e.eInfo.qStop;state++) {
+			ColumnBundle HC;
+			system.eVars.applyHamiltonian(state,system.eVars.F[state],HC,referenceEnergy,true);
+		}
+	}
 	const int nk=kMesh.size();
 	std::vector<vector3<>> mesh;
 	for(const auto& ke: kMesh) mesh.push_back(ke.point.k);
@@ -490,10 +543,16 @@ void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 		for(int d=0; d<3; d++) q[d]-=floor(q[d]+0.5);
 		qmesh.push_back(q);
 	}
-	const vector3<int> screeningMesh=wannier.koopmansScreeningMesh.isNonzero() ? wannier.koopmansScreeningMesh : folding;
-	const int nqScreen=screeningMesh[0]*screeningMesh[1]*screeningMesh[2];
-	const bool coarseScreening=nqScreen!=nk;
-	const double screeningWeight=double(nk)/nqScreen;
+	vector3<int> screeningMesh=wannier.koopmansScreeningMesh.isNonzero() ? wannier.koopmansScreeningMesh : folding;
+	const vector3<int> requestedScreeningMesh=screeningMesh;
+	int nqScreen=screeningMesh[0]*screeningMesh[1]*screeningMesh[2];
+	bool coarseScreening=nqScreen!=nk;
+	double screeningWeight=double(nk)/nqScreen;
+	const bool adaptiveScreening=coarseScreening && wannier.koopmansScreeningEnergyTolerance>0. && !symmetryAudit;
+	const bool importedScreening=!wannier.koopmansAlphaFilename.empty();
+	vector3<int> alphaSourceMesh=screeningMesh;
+	diagMatrix importedAlpha(nCenters);
+	std::vector<double> importedBare(nCenters), importedRelaxed(nCenters);
 	std::vector<bool> screeningQ(nk,true);
 	if(coarseScreening) for(int iq=0;iq<nk;iq++) for(int d=0;d<3;d++) {
 		double index=qmesh[iq][d]*screeningMesh[d];
@@ -501,8 +560,11 @@ void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 	}
 	if(int(std::count(screeningQ.begin(),screeningQ.end(),true))!=nqScreen)
 		die("KI screening q mesh is not a subset of the Wannier mesh.\n");
+	if(importedScreening) std::fill(screeningQ.begin(),screeningQ.end(),false);
 	logPrintf("KI screening q mesh: %d %d %d (%d/%d q points); full k integration and bare Hamiltonian retained.\n",
 		screeningMesh[0],screeningMesh[1],screeningMesh[2],nqScreen,nk);
+	if(adaptiveScreening) logPrintf("KI adaptive screening: tolerance %.6g eV; require two successive Hamiltonian changes below tolerance; reuse completed responses.\n",
+		wannier.koopmansScreeningEnergyTolerance);
 
 	// Gather the canonical states once, one k point at a time. Source columns
 	// are retained for building exact occupied projectors at k +/- q.
@@ -558,6 +620,46 @@ void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 		correction[ik]=zeroes(nCenters,nCenters);
 	}
 	Cother.clear();
+	if(importedScreening) {
+		std::ifstream input(wannier.koopmansAlphaFilename.c_str());
+		if(!input) die("Cannot open imported KI screening table.\n");
+		bool functionalOK=false,spinOK=false,epsilonOK=false,meshOK=false;
+		std::vector<bool> seen(nCenters,false);
+		std::string line;
+		while(std::getline(input,line)) {
+			std::istringstream fields(line);
+			std::string first; if(!(fields>>first)) continue;
+			if(first=="#") {
+				std::string key,value; fields>>key;
+				if(key=="functional") { fields>>value; functionalOK=value=="KI_second_order"; }
+				if(key=="spin_treatment") {
+					fields>>value;
+					spinOK=value==(wannier.koopmansSpinResponse ? "single_spin_charge_and_magnetic" : "restricted_charge_only");
+				}
+				if(key=="epsilon_infinity") {
+					double epsilon; if(fields>>epsilon) epsilonOK=std::isfinite(epsilon) && fabs(epsilon-wannier.koopmansEpsilon)<1e-12;
+				}
+				if(key=="screening_q_mesh") {
+					vector3<int> full; std::string separator,label;
+					if(fields>>alphaSourceMesh[0]>>alphaSourceMesh[1]>>alphaSourceMesh[2]>>separator>>label>>full[0]>>full[1]>>full[2])
+						meshOK=separator==";" && label=="full_k_mesh" && full==alphaSourceMesh && full[0]>0 && full[1]>0 && full[2]>0;
+				}
+				continue;
+			}
+			std::istringstream row(line);
+			int n; double occupation,bareValue,relaxed,alpha,image;
+			if(!(row>>n>>occupation>>bareValue>>relaxed>>alpha>>image) || n<0 || n>=nCenters || seen[n])
+				die("Invalid, duplicate or out-of-range row in imported KI screening table.\n");
+			if(occupation!=occupations[n] || !std::isfinite(bareValue) || fabs(bareValue)<1e-12 || !std::isfinite(relaxed)
+				|| !std::isfinite(alpha) || !std::isfinite(image) || fabs(relaxed-alpha*bareValue)>1e-10*(1.+fabs(relaxed)))
+				die("Imported KI screening has inconsistent occupation, curvature or alpha.\n");
+			seen[n]=true; importedAlpha[n]=alpha; importedBare[n]=bareValue; importedRelaxed[n]=relaxed;
+		}
+		if(!functionalOK || !spinOK || !epsilonOK || !meshOK || std::count(seen.begin(),seen.end(),true)!=nCenters)
+			die("Imported KI screening requires complete orbital rows and matching functional, spin, epsilon and full coarse k/q mesh metadata.\n");
+		logPrintf("KI imported screening: '%s'; source k/q mesh %d %d %d; no screening response solves.\n",
+			wannier.koopmansAlphaFilename.c_str(),alphaSourceMesh[0],alphaSourceMesh[1],alphaSourceMesh[2]);
+	}
 	if(!std::isfinite(evMax) || !std::isfinite(ecMin) || !(ecMin>evMax+1e-8))
 		die("wannier-koopmans requires a finite DFT band gap; store at least one empty band to check it.\n");
 
@@ -683,7 +785,7 @@ void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 	if(nQGroups>1 || wannier.koopmansReduceSymmetry)
 	{
 		ScreeningReuse planner(e,qmesh,wannier.koopmansReduceSymmetry,wannier.koopmansSymmetryTolerance,true);
-		qOwner=planner.qOwners(nQGroups,qOrder,qStar,coarseScreening ? screeningQ : std::vector<bool>());
+		qOwner=planner.qOwners(nQGroups,qOrder,qStar,coarseScreening && !adaptiveScreening ? screeningQ : std::vector<bool>());
 		if(!wannier.koopmansOptimizeResponse) std::iota(qOrder.begin(),qOrder.end(),0);
 	}
 	logPrintf("KI q parallelism: %d response groups requested, %d active, %d MPI ranks total.\n",
@@ -758,9 +860,25 @@ void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 	std::shared_ptr<CoulombPeriodic> regularCoulomb;
 	if(wannier.koopmansEpsilon) regularCoulomb=std::make_shared<CoulombPeriodic>(e.gInfo,regularParams);
 	else logPrintf("KI uses a neutralizing background; converge the q mesh for charged-orbital image interactions.\n");
+	std::shared_ptr<CoulombPeriodic> screeningCoulomb=regularCoulomb;
+	auto updateScreeningCoulomb=[&]() {
+		screeningCoulomb=regularCoulomb;
+		if(!regularCoulomb || !coarseScreening) return;
+		// The Gamma singularity depends on the q-mesh supercell, not just
+		// its quadrature weight. Retain the fine kernel for the Hamiltonian
+		// and construct the coarse one independently for screening.
+		std::vector<vector3<>> screeningPoints;
+		for(int iq=0;iq<nk;iq++) if(screeningQ[iq]) screeningPoints.push_back(qmesh[iq]);
+		regularParams.supercell=std::make_shared<Supercell>(e.gInfo,screeningPoints,
+			std::vector<SpaceGroupOp>(1),std::vector<int>(1,1));
+		screeningCoulomb=std::make_shared<CoulombPeriodic>(e.gInfo,regularParams);
+	};
+	updateScreeningCoulomb();
 
 	std::vector<double> bare(nCenters,0.), screeningBare(nCenters,0.), relaxation(nCenters,0.), singular(nCenters,0.);
+	std::vector<double> screeningSingular(nCenters,0.);
 	std::vector<double> bareQ(size_t(nk)*nCenters,0.), responseQ(bareQ.size(),0.), imageQ(bareQ.size(),0.);
+	std::vector<double> screeningImageQ(bareQ.size(),0.);
 	ScreeningReuse reuse(e,qmesh,wannier.koopmansReduceSymmetry,wannier.koopmansSymmetryTolerance,false,
 		wannier.koopmansOptimizeResponse ? wannier.koopmansSymmetryCacheMiB : 256.,wannier.koopmansVerbose);
 	// Only the offset bases/projectors and source depend on q. The frozen
@@ -801,7 +919,7 @@ void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 	};
 	int plannedQCount=0,plannedPairCount=0;
 	logPrintf("KI planning independent q points (orbital-source symmetry checks only).\n"); logFlush();
-	if(wannier.koopmansReduceSymmetry) {
+	if(wannier.koopmansReduceSymmetry && !adaptiveScreening) {
 		if(!wannier.koopmansOptimizeResponse) solver.updateExcorrCache();
 		ScreeningReuse plan(e,qmesh,true,wannier.koopmansSymmetryTolerance,true,
 			wannier.koopmansOptimizeResponse ? wannier.koopmansSymmetryCacheMiB : 256.);
@@ -848,7 +966,7 @@ void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 	// Bare conduction corrections depend only on frozen orbital sources. Form
 	// one orbital's owned-q potentials, convolve them across the mesh, and
 	// release those fields before moving to the next orbital.
-	if(fftCorrelation && !symmetryAudit) for(int n:emptyCenters) {
+	if(fftCorrelation && !symmetryAudit && !wannier.koopmansScreeningOnly) for(int n:emptyCenters) {
 		std::vector<complexScalarField> potentials(nk);
 		for(int iq=0;iq<nk;iq++) if(qOwner[iq]==responseGroups.index) {
 			complexScalarField rho=correlation->source(n,iq);
@@ -863,11 +981,40 @@ void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 		correlation->accumulateConduction(n,potentials,emptyCenters,correction);
 		logPrintf("KI bare conduction convolution: orbital %d/%d complete.\n",n+1,nCenters); logFlush();
 	}
+	// A coarse ratio is only a mesh estimate. Keep every completed scalar
+	// response as the mesh grows; never interpolate it or clip its sign.
+	std::vector<bool> responseDone(nk,false);
+	struct ScreeningStage {
+		vector3<int> mesh;
+		std::vector<double> bare,relaxed;
+		diagMatrix alpha;
+		double change;
+	};
+	std::vector<ScreeningStage> screeningStages;
+	matrix convergenceCorrection;
+	std::vector<double> convergenceBare;
+	int smallChanges=0;
+	for(int screeningPass=0;;screeningPass++) {
+	const bool firstPass=screeningPass==0;
+	if(!firstPass) {
+		std::fill(screeningBare.begin(),screeningBare.end(),0.);
+		std::fill(relaxation.begin(),relaxation.end(),0.);
+		std::fill(screeningSingular.begin(),screeningSingular.end(),0.);
+		computedQCount=0; lastComputedQ=-1;
+		plannedQCount=0;
+		for(int iq:qOrder) if(qOwner[iq]==responseGroups.index && screeningQ[iq] && !responseDone[iq]) plannedQCount++;
+		logPrintf("KI screening refinement: mesh %d %d %d (%d/%d q points); at most %d new q points in group %d.\n",
+			screeningMesh[0],screeningMesh[1],screeningMesh[2],nqScreen,nk,plannedQCount,responseGroups.index+1);
+	}
+	if(adaptiveScreening && firstPass)
+		logPrintf("KI adaptive workload counts are upper bounds before orbital-source symmetry reuse.\n");
+	reuse.clearStar();
 	int lastStar=-1;
 	for(int iq:qOrder)
 	{
 		if(qOwner[iq]!=responseGroups.index) continue;
 		if(symmetryAudit && !screeningQ[iq]) continue;
+		if(!firstPass && !screeningQ[iq]) continue;
 		if(wannier.koopmansOptimizeResponse && wannier.koopmansReduceSymmetry && qStar[iq]!=lastStar) {
 			reuse.clearStar(); lastStar=qStar[iq];
 		}
@@ -954,7 +1101,7 @@ void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 		qPrepared=true;
 		};
 		// Symmetry-reused scalar responses need no offset wavefunctions/bases.
-		if(!wannier.koopmansOptimizeResponse) prepareQ();
+		if(!wannier.koopmansOptimizeResponse && screeningQ[iq]) prepareQ();
 		std::vector<MeshPoint> plus(nk);
 		if(!fftCorrelation) for(int ik=0; ik<nk; ik++) plus[ik]=meshPoint(mesh,mesh[ik]+q);
 		for(int n=0; n<nCenters; n++)
@@ -969,13 +1116,20 @@ void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 			// self curvature contracts K_c+K_m; only K_c includes Hartree.
 			double bareTerm=0.;
 			for(const auto& vChannel:potential) bareTerm+=dot(rho,vChannel).real()/nk;
-			bare[n]+=bareTerm;
-			bareQ[size_t(iq)*nCenters+n]=nk*bareTerm;
+			if(firstPass) {
+				bare[n]+=bareTerm;
+				bareQ[size_t(iq)*nCenters+n]=nk*bareTerm;
+			}
 			if(screeningQ[iq]) screeningBare[n]+=screeningWeight*bareTerm;
 			complexScalarField v=(1./e.gInfo.dV)*potential[0];
 			if(p.kiSpinResponse) v+=(1./e.gInfo.dV)*potential[1];
 			double response=0.;
-			if(screeningQ[iq] && !reuse.lookup(rho,occupations[n],iq,bareTerm,response,n))
+			if(screeningQ[iq] && responseDone[iq]) {
+				response=responseQ[size_t(iq)*nCenters+n]/nk;
+				// Seed the current star cache without counting a second solve.
+				reuse.record(rho,n,occupations[n],iq,bareTerm,response,false);
+			}
+			else if(screeningQ[iq] && !reuse.lookup(rho,occupations[n],iq,bareTerm,response,n))
 			{
 				// Count a q only when an orbital actually needs an independent
 				// response. Reused q points do not advance this group-local index;
@@ -1009,13 +1163,20 @@ void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 				complexScalarFieldTilde rhoG=J(rho);
 				complexScalarField delta=I((*regularCoulomb)(rhoG,q,0.)-e.coulomb->applyBloch(rhoG,q));
 				double image=e.gInfo.dV*dot(rho,delta).real();
-				singular[n]+=image/nk;
-				imageQ[size_t(iq)*nCenters+n]=image;
+				if(firstPass) {
+					singular[n]+=image/nk;
+					imageQ[size_t(iq)*nCenters+n]=image;
+				}
+				complexScalarField screeningDelta=coarseScreening
+					? I((*screeningCoulomb)(rhoG,q,0.)-e.coulomb->applyBloch(rhoG,q)) : delta;
+				double screeningImage=e.gInfo.dV*dot(rho,screeningDelta).real();
+				screeningSingular[n]+=screeningImage/nqScreen;
+				screeningImageQ[size_t(iq)*nCenters+n]=screeningImage;
 				vBare+=delta;
 			}
 			// SI Eq. 6: <V_(n,q)|conj(u_(i,k)) u_(n,k+q)> / Nq.
 			// Occupied columns have only the constant -Delta_n/2 contribution.
-			if(!symmetryAudit && !occupations[n] && !fftCorrelation) for(int ik=0; ik<nk; ik++)
+			if(firstPass && !symmetryAudit && !wannier.koopmansScreeningOnly && !occupations[n] && !fftCorrelation) for(int ik=0; ik<nk; ik++)
 			{
 				complexScalarField shifted=clone(orbital[plus[ik].index][n]);
 				multiplyBlochPhase(shifted,-plus[ik].wrap);
@@ -1040,7 +1201,96 @@ void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 			}
 		}
 		p.dVext.reset();
+		if(screeningQ[iq]) responseDone[iq]=true;
 	}
+	if(!adaptiveScreening) break;
+
+	// Collect replicas only from group heads. The original communicator is
+	// retained while the Sternheimer solver uses group-local communicators.
+	auto collect=[&](std::vector<double> values) {
+		if(nQGroups>1) {
+			if(!mpiWorld->isHead()) std::fill(values.begin(),values.end(),0.);
+			responseWorld->allReduceData(values,MPIUtil::ReduceSum);
+		}
+		return values;
+	};
+	if(firstPass) {
+		convergenceBare=bare;
+		for(int n=0;n<nCenters;n++) convergenceBare[n]+=singular[n];
+		convergenceBare=collect(convergenceBare);
+		convergenceCorrection=zeroes(nCenters*nCenters,nk);
+		if(nQGroups==1 || mpiWorld->isHead()) for(int ik=0;ik<nk;ik++)
+			callPref(eblas_copy)(convergenceCorrection.dataPref()+convergenceCorrection.index(0,ik),correction[ik].dataPref(),correction[ik].nData());
+		if(nQGroups>1) responseWorld->allReduceData(convergenceCorrection,MPIUtil::ReduceSum);
+		// Complete exactly the same upper-triangle convention as the final
+		// Hamiltonian, including its full-mesh diagonal -bare/2 term.
+		complex* entries=convergenceCorrection.data();
+		for(int ik=0;ik<nk;ik++) for(int n=0;n<nCenters;n++)
+			entries[convergenceCorrection.index(n+n*nCenters,ik)]-=0.5*convergenceBare[n];
+	}
+	auto stageBare=screeningBare, stageRelaxed=screeningBare;
+	for(int n=0;n<nCenters;n++) {
+		stageBare[n]+=screeningSingular[n];
+		stageRelaxed[n]+=relaxation[n]+(wannier.koopmansEpsilon ? screeningSingular[n]/wannier.koopmansEpsilon : 0.);
+	}
+	stageBare=collect(stageBare); stageRelaxed=collect(stageRelaxed);
+	diagMatrix stageAlpha(nCenters);
+	bool acceptable=true;
+	for(int n=0;n<nCenters;n++) {
+		stageAlpha[n]=std::isfinite(stageBare[n]) && fabs(stageBare[n])>=1e-12 ? stageRelaxed[n]/stageBare[n] : NAN;
+		// Negative coefficients remain available for diagnosis at the full
+		// mesh; they never justify accepting a coarse approximation.
+		acceptable=acceptable && std::isfinite(stageAlpha[n]) && stageAlpha[n]>=0.;
+		logPrintf("KI screening stage %d orbital %d: bare=%.12g relaxed=%.12g alpha=%.12g.\n",
+			screeningPass+1,n,stageBare[n],stageRelaxed[n],stageAlpha[n]);
+	}
+	double change=INFINITY;
+	if(!screeningStages.empty()) {
+		// ||Delta H||_2 <= ||Delta H||_F bounds the change in each native-k
+		// eigenvalue between these two meshes. It does NOT bound the residual
+		// integration error or arbitrary-k Wannier interpolation error.
+		change=0.;
+		const auto& previous=screeningStages.back().alpha;
+		const complex* entries=convergenceCorrection.data();
+		for(int ik=0;ik<nk;ik++) {
+			double normSquared=0.;
+			for(int n=0;n<nCenters;n++) for(int m=0;m<=n;m++) {
+				complex value=entries[convergenceCorrection.index(m+n*nCenters,ik)]*(stageAlpha[n]-previous[n]);
+				double elementNorm=value.real()*value.real()+(m==n ? 0. : value.imag()*value.imag());
+				normSquared+=(m==n ? 1. : 2.)*elementNorm;
+			}
+			if(!std::isfinite(normSquared)) { change=INFINITY; break; }
+			change=std::max(change,sqrt(normSquared));
+		}
+	}
+	smallChanges=acceptable && change<=wannier.koopmansScreeningEnergyTolerance*eV ? smallChanges+1 : 0;
+	screeningStages.push_back({screeningMesh,stageBare,stageRelaxed,stageAlpha,change});
+	logPrintf("KI screening stage %d: mesh %d %d %d, Hamiltonian change bound %.9g eV, %d/2 successive small changes.\n",
+		screeningPass+1,screeningMesh[0],screeningMesh[1],screeningMesh[2],change/eV,smallChanges);
+	bool stop=!coarseScreening || smallChanges>=2;
+	responseWorld->bcast(stop); // One decision for all solver communicators.
+	if(stop) {
+		logPrintf("KI adaptive screening finished: %s.\n",coarseScreening ? "mesh convergence estimate satisfied" : "full electronic q mesh reached");
+		break;
+	}
+	// Grow along nested divisors, preserving all previously sampled q's.
+	// This also handles anisotropic and non-power-of-two electronic meshes.
+	for(int d=0;d<3;d++) {
+		int ratio=folding[d]/screeningMesh[d];
+		if(ratio==1) continue;
+		int factor=2;
+		while(ratio%factor) factor++;
+		screeningMesh[d]*=factor;
+	}
+	nqScreen=screeningMesh[0]*screeningMesh[1]*screeningMesh[2];
+	coarseScreening=nqScreen!=nk; screeningWeight=double(nk)/nqScreen;
+	std::fill(screeningQ.begin(),screeningQ.end(),true);
+	for(int iq=0;iq<nk;iq++) for(int d=0;d<3;d++) {
+		double index=qmesh[iq][d]*screeningMesh[d];
+		if(fabs(index-round(index))>1e-8) screeningQ[iq]=false;
+	}
+	updateScreeningCoulomb();
+	} // screening refinement passes
 
 	logPrintf("KI group %d/%d: %s q points total: %d.\n",
 		responseGroups.index+1,nQGroups,symmetryAudit ? "audit" : "computed",computedQCount);
@@ -1065,6 +1315,8 @@ void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 			std::fill(bareQ.begin(),bareQ.end(),0.);
 			std::fill(responseQ.begin(),responseQ.end(),0.);
 			std::fill(imageQ.begin(),imageQ.end(),0.);
+			std::fill(screeningSingular.begin(),screeningSingular.end(),0.);
+			std::fill(screeningImageQ.begin(),screeningImageQ.end(),0.);
 		}
 		mpiWorld->allReduceData(bare,MPIUtil::ReduceSum);
 		mpiWorld->allReduceData(screeningBare,MPIUtil::ReduceSum);
@@ -1073,6 +1325,8 @@ void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 		mpiWorld->allReduceData(bareQ,MPIUtil::ReduceSum);
 		mpiWorld->allReduceData(responseQ,MPIUtil::ReduceSum);
 		mpiWorld->allReduceData(imageQ,MPIUtil::ReduceSum);
+		mpiWorld->allReduceData(screeningSingular,MPIUtil::ReduceSum);
+		mpiWorld->allReduceData(screeningImageQ,MPIUtil::ReduceSum);
 		matrix packed=zeroes(nCenters*nCenters,nk);
 		if(groupHead) for(int ik=0;ik<nk;ik++)
 			callPref(eblas_copy)(packed.dataPref()+packed.index(0,ik),correction[ik].dataPref(),correction[ik].nData());
@@ -1082,37 +1336,60 @@ void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 	}
 	reuse.report(nQGroups>1 ? mpiWorld : nullptr,nQGroups>1 ? groupHead : true,symmetryAudit);
 	if(symmetryAudit) {
+		for(int n=0;n<nCenters;n++)
+			logPrintf("KI audited screening curvature %d: bare=%.15g (%d q points; no response).\n",
+				n,screeningBare[n]+screeningSingular[n],nqScreen);
 		logPrintf("KI symmetry audit complete: no response solves or KI spectral outputs were produced.\n");
 		return;
 	}
 	if(mpiWorld->isHead()) {
 		FILE* resolved=openOutput(wannier.getFilename(Wannier::FilenameDump,"koopmansResponse",&iSpin));
-		fprintf(resolved,"# iq orbital qx qy qz bare_Ha response_Ha image_Ha screened; unweighted q contributions\n");
+		fprintf(resolved,"# iq orbital qx qy qz bare_Ha response_Ha image_Ha screened screening_image_Ha; unweighted q contributions\n");
 		for(int iq=0;iq<nk;iq++) for(int n=0;n<nCenters;n++) {
 			size_t index=size_t(iq)*nCenters+n;
-			fprintf(resolved,"%d %d %.15g %.15g %.15g %.15g %.15g %.15g %d\n",iq,n,qmesh[iq][0],qmesh[iq][1],qmesh[iq][2],bareQ[index],responseQ[index],imageQ[index],screeningQ[iq] ? 1 : 0);
+			fprintf(resolved,"%d %d %.15g %.15g %.15g %.15g %.15g %.15g %d %.15g\n",iq,n,qmesh[iq][0],qmesh[iq][1],qmesh[iq][2],bareQ[index],responseQ[index],imageQ[index],screeningQ[iq] ? 1 : 0,screeningImageQ[index]);
 		}
 		fclose(resolved);
 	}
 
 	FILE* screening=mpiWorld->isHead() ? openOutput(wannier.getFilename(Wannier::FilenameDump,"koopmansScreening",&iSpin)) : nullptr;
 	if(screening) {
+		fprintf(screening,"# functional KI_second_order\n");
+		fprintf(screening,"# epsilon_infinity %.15g; electrostatics %s\n",wannier.koopmansEpsilon,
+			wannier.koopmansEpsilon ? "probe_charge_ewald" : "neutralizing_background");
 		fprintf(screening,"# spin_treatment %s\n",wannier.koopmansSpinResponse ? "single_spin_charge_and_magnetic" : "restricted_charge_only");
-		fprintf(screening,"# screening_q_mesh %d %d %d; full_k_mesh %d %d %d\n",screeningMesh[0],screeningMesh[1],screeningMesh[2],folding[0],folding[1],folding[2]);
+		const auto& reportedMesh=importedScreening ? alphaSourceMesh : screeningMesh;
+		fprintf(screening,"# screening_q_mesh %d %d %d; full_k_mesh %d %d %d\n",reportedMesh[0],reportedMesh[1],reportedMesh[2],folding[0],folding[1],folding[2]);
+		fprintf(screening,"# screening_mode %s; requested_q_mesh %d %d %d; energy_tolerance_eV %.15g\n",
+			importedScreening ? "imported" : (adaptiveScreening ? "adaptive" : (coarseScreening ? "fixed" : "full")),
+			requestedScreeningMesh[0],requestedScreeningMesh[1],requestedScreeningMesh[2],wannier.koopmansScreeningEnergyTolerance);
+		if(importedScreening) fprintf(screening,"# alpha_source %s\n",wannier.koopmansAlphaFilename.c_str());
+		if(!wannier.koopmansReferenceDensity.empty()) fprintf(screening,"# reference_density %s\n",wannier.koopmansReferenceDensity.c_str());
+		for(size_t stage=0;stage<screeningStages.size();stage++) {
+			const auto& result=screeningStages[stage];
+			fprintf(screening,"# screening_stage %zu %d %d %d change_bound_eV %.15g\n",stage+1,result.mesh[0],result.mesh[1],result.mesh[2],result.change/eV);
+			for(int n=0;n<nCenters;n++) fprintf(screening,"# screening_stage_curvature %zu %d %.15g %.15g %.15g\n",
+				stage+1,n,result.bare[n],result.relaxed[n],result.alpha[n]);
+		}
 		fprintf(screening,"# orbital occupation bare_curvature_Ha relaxed_curvature_Ha alpha image_correction_Ha\n");
 	}
 	diagMatrix alpha(nCenters);
+	const auto& alphaMesh=importedScreening ? alphaSourceMesh : screeningMesh;
 	for(int n=0; n<nCenters; n++)
 	{
-		double screeningRelaxed=screeningBare[n]+relaxation[n]+(wannier.koopmansEpsilon ? screeningWeight*singular[n]/wannier.koopmansEpsilon : 0.);
-		screeningBare[n]+=screeningWeight*singular[n];
+		double screeningRelaxed=screeningBare[n]+relaxation[n]+(wannier.koopmansEpsilon ? screeningSingular[n]/wannier.koopmansEpsilon : 0.);
+		screeningBare[n]+=screeningSingular[n];
+		if(importedScreening) { screeningBare[n]=importedBare[n]; screeningRelaxed=importedRelaxed[n]; }
 		bare[n]+=singular[n];
 		if(!std::isfinite(bare[n]) || fabs(bare[n])<1e-12 || !std::isfinite(screeningBare[n]) || fabs(screeningBare[n])<1e-12 || !std::isfinite(screeningRelaxed))
 			die("Invalid or vanishing KI orbital curvature.\n");
-		alpha[n]=screeningRelaxed/screeningBare[n]; // Eq. 18; do not silently clamp alpha.
+		alpha[n]=importedScreening ? importedAlpha[n] : screeningRelaxed/screeningBare[n]; // Eq. 18; do not silently clamp alpha.
+		if(alpha[n]<0.) logPrintf("WARNING: KI orbital %d has negative screening alpha %.9g on the %d %d %d q mesh; check electrostatic and mesh convergence.\n",
+			n,alpha[n],alphaMesh[0],alphaMesh[1],alphaMesh[2]);
 		double relaxed=alpha[n]*bare[n];
-		if(coarseScreening) {
-			logPrintf("KI screening curvature %d: bare=%.12g relaxed=%.12g (%d q points).\n",n,screeningBare[n],screeningRelaxed,nqScreen);
+		if(coarseScreening || importedScreening) {
+			int sourceCount=importedScreening ? alphaSourceMesh[0]*alphaSourceMesh[1]*alphaSourceMesh[2] : nqScreen;
+			logPrintf("KI screening curvature %d: bare=%.12g relaxed=%.12g (%d source q points).\n",n,screeningBare[n],screeningRelaxed,sourceCount);
 			if(screening) fprintf(screening,"# screening_curvature %d %.15g %.15g\n",n,screeningBare[n],screeningRelaxed);
 		}
 		logPrintf("KI orbital %d: f=%.0f bare=%.12g relaxed=%.12g alpha=%.12g\n",n,occupations[n],bare[n],relaxed,alpha[n]);
@@ -1120,6 +1397,10 @@ void WannierMinimizer::saveMLWF_KI(int iSpin, const matrix& phase)
 		for(int ik=0; ik<nk; ik++) correction[ik].set(n,n,correction[ik](n,n)-0.5*bare[n]);
 	}
 	if(screening) fclose(screening);
+	if(wannier.koopmansScreeningOnly) {
+		logPrintf("KI screening-only calculation complete; no KI spectral Hamiltonian written.\n");
+		return;
+	}
 
 	matrix hTilde=zeroes(nCenters*nCenters,phase.nRows()), deltaTilde=zeroes(nCenters*nCenters,phase.nRows());
 	FILE* bands=mpiWorld->isHead() ? openOutput(wannier.getFilename(Wannier::FilenameDump,"koopmansBands",&iSpin)) : nullptr;

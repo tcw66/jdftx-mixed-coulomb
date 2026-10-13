@@ -189,6 +189,7 @@ private:
 	void saveMLWF_C(int iSpin); //Wavefunctions
 	void saveMLWF_H(int iSpin, const matrix& phase); //Hamiltonian
 	void saveMLWF_KI(int iSpin, const matrix& phase); //screened second-order Koopmans Hamiltonian
+	void saveMLWF_KI_densities(int iSpin); //periodic orbital densities for cross-grid matching
 	void saveMLWF_P(int iSpin, const matrix& phase); //Momenta
 	void saveMLWF_D(int iSpin, const matrix& phase); //Gradient
 	void saveMLWF_S(int iSpin, const matrix& phase); //Spins

@@ -769,14 +769,17 @@ struct CommandWannierKoopmansScreeningMesh : public Command
 	CommandWannierKoopmansScreeningMesh() : Command("wannier-koopmans-screening-mesh", "wannier")
 	{
 		require("wannier-koopmans");
-		format="<nq0> <nq1> <nq2>";
-		comments="Optional Gamma-centered q mesh for the screening coefficients alpha.\n"
+		format="<nq0> <nq1> <nq2> [<energyTolerance_eV>=0.005]";
+		comments="Initial Gamma-centered q mesh for the screening coefficients alpha.\n"
 			"Each positive dimension must divide the corresponding kpoint-folding.\n"
 			"The occupied-state k integration, orbital sources, bare KI Hamiltonian\n"
-			"and output bands retain the full Wannier mesh. Only the q quadrature\n"
-			"in the bare/relaxed curvature ratio for alpha uses this coarse mesh.\n"
-			"Omitting this command uses the full mesh. Converge alpha and the gap\n"
-			"against that result before using a coarser screening mesh.";
+			"and output bands retain the full Wannier mesh. Refine the screening mesh\n"
+			"and reuse completed responses until two successive changes in the KI\n"
+			"Hamiltonian are below energyTolerance_eV, or the full mesh is reached.\n"
+			"This is a convergence estimate, not a bound on the remaining mesh error.\n"
+			"Zero tolerance selects the legacy fixed-mesh diagnostic approximation.\n"
+			"Omitting this command uses the full mesh. Source-only symmetry audits\n"
+			"always use the requested mesh without refinement.";
 	}
 	void process(ParamList& pl,Everything& e)
 	{
@@ -785,13 +788,78 @@ struct CommandWannierKoopmansScreeningMesh : public Command
 			pl.get(mesh[d],0,"q mesh dimension",true);
 			if(mesh[d]<=0) throw string("screening mesh dimensions must be positive");
 		}
+		auto& tolerance=((WannierEverything&)e).wannier.koopmansScreeningEnergyTolerance;
+		pl.get(tolerance,0.005,"energyTolerance_eV");
+		if(!std::isfinite(tolerance) || tolerance<0.) throw string("screening energy tolerance must be finite and nonnegative");
 	}
 	void printStatus(Everything& e,int)
 	{
 		const auto& mesh=((WannierEverything&)e).wannier.koopmansScreeningMesh;
-		logPrintf("%d %d %d",mesh[0],mesh[1],mesh[2]);
+		logPrintf("%d %d %d %.15g",mesh[0],mesh[1],mesh[2],((WannierEverything&)e).wannier.koopmansScreeningEnergyTolerance);
 	}
 } commandWannierKoopmansScreeningMesh;
+
+struct CommandWannierKoopmansReferenceDensity : public Command
+{
+	CommandWannierKoopmansReferenceDensity() : Command("wannier-koopmans-reference-density", "wannier") {
+		require("wannier-koopmans");
+		format="<filename>";
+		comments="Retain the electron density of a separate SCF calculation for KI.\n"
+			"Use this for coarse-grid NSCF orbitals computed at a fine-grid SCF density.\n"
+			"The binary density must use the same lattice, FFT grid, XC and pseudopotentials.\n"
+			"The potential and XC kernel are built from this density; it is not replaced\n"
+			"by the density obtained from the NSCF wavefunctions. Nonmagnetic NC only.";
+	}
+	void process(ParamList& pl, Everything& e) {
+		pl.get(((WannierEverything&)e).wannier.koopmansReferenceDensity,string(),"filename",true);
+	}
+	void printStatus(Everything& e,int) { logPrintf("%s",((WannierEverything&)e).wannier.koopmansReferenceDensity.c_str()); }
+} commandWannierKoopmansReferenceDensity;
+
+struct CommandWannierKoopmansScreeningOnly : public Command
+{
+	CommandWannierKoopmansScreeningOnly() : Command("wannier-koopmans-screening-only", "wannier") {
+		require("wannier-koopmans"); forbid("wannier-koopmans-alpha-file"); forbid("wannier-koopmans-screening-mesh");
+		format="[<screeningOnly>=yes]";
+		comments="Calculate screening curvatures and alphas without constructing a KI\n"
+			"Hamiltonian. Use this for a separate coarse electronic/Wannier grid.\n"
+			"Write koopmansScreening and koopmansResponse; skip KI spectral outputs.";
+	}
+	void process(ParamList& pl, Everything& e) { pl.get(((WannierEverything&)e).wannier.koopmansScreeningOnly,true,boolMap,"screeningOnly"); }
+	void printStatus(Everything& e,int) { logPrintf("%s",((WannierEverything&)e).wannier.koopmansScreeningOnly ? "yes" : "no"); }
+} commandWannierKoopmansScreeningOnly;
+
+struct CommandWannierKoopmansAlphaFile : public Command
+{
+	CommandWannierKoopmansAlphaFile() : Command("wannier-koopmans-alpha-file", "wannier") {
+		require("wannier-koopmans"); forbid("wannier-koopmans-screening-mesh"); forbid("wannier-koopmans-screening-only");
+		format="<filename>";
+		comments="Construct the full-mesh KI Hamiltonian using imported orbital alphas,\n"
+			"without solving screening responses. Read a koopmansScreening-format table\n"
+			"in the target orbital order. Require matching occupations, KI(2), spin\n"
+			"treatment and epsilonInfinity metadata. Use the separate coarse-grid workflow\n"
+			"to establish model consistency and match coarse/fine Wannier orbitals.";
+	}
+	void process(ParamList& pl, Everything& e) {
+		pl.get(((WannierEverything&)e).wannier.koopmansAlphaFilename,string(),"filename",true);
+	}
+	void printStatus(Everything& e,int) { logPrintf("%s",((WannierEverything&)e).wannier.koopmansAlphaFilename.c_str()); }
+} commandWannierKoopmansAlphaFile;
+
+struct CommandWannierKoopmansSaveDensities : public Command
+{
+	CommandWannierKoopmansSaveDensities() : Command("wannier-koopmans-save-densities", "wannier") {
+		require("wannier");
+		format="[<save>=yes]";
+		comments="Export Gamma-periodic orbital densities for matching Wannier orbitals\n"
+			"between separate electronic meshes. Write koopmansOrbitalDensities (binary)\n"
+			"and koopmansDensityFormat. Available for spintype no-spin only.";
+	}
+	void process(ParamList& pl, Everything& e) {
+		pl.get(((WannierEverything&)e).wannier.koopmansSaveDensities,true,boolMap,"save");
+	}
+	void printStatus(Everything& e,int) { logPrintf("%s",((WannierEverything&)e).wannier.koopmansSaveDensities ? "yes" : "no"); }
+} commandWannierKoopmansSaveDensities;
 
 struct CommandWannierKoopmansResponse : public Command
 {

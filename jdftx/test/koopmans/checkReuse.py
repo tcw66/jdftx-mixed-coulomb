@@ -3,6 +3,7 @@
 Usage: checkReuse.py BUILD_DIR H_NC_UPF [MPIEXEC]
 """
 from pathlib import Path
+import hashlib
 import os
 import re
 import subprocess
@@ -16,13 +17,14 @@ launcher = sys.argv[3] if len(sys.argv) > 3 else None
 env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
 
 
-def run(folder, executable, text, ranks=1):
+def run(folder, executable, text, ranks=1, audit=False):
     (folder/'input.in').write_text(text)
     (folder/'output.out').unlink(missing_ok=True)
     command = [str(build/executable), '-c', '1', '-i', 'input.in', '-o', 'output.out']
     if ranks > 1:
         command = [launcher, '-n', str(ranks)]+command
-    subprocess.run(command, cwd=folder, env=env, check=True, stdout=subprocess.DEVNULL)
+    run_env = dict(env, JDFTX_KI_SYMMETRY_AUDIT='1') if audit else env
+    subprocess.run(command, cwd=folder, env=run_env, check=True, stdout=subprocess.DEVNULL)
     log = (folder/'output.out').read_text()
     assert 'Done!' in log and 'Stack trace:' not in log, log[-2000:]
     return log
@@ -90,6 +92,16 @@ wannier-koopmans 0 400 1e-9 no
             assert solved < total, reduced_log[-2000:]
             if not empty:
                 assert solved <= expect, (case, solved, expect)
+            # A response-free audit must predict the same reuse decisions and
+            # leave already computed spectra/screening untouched.
+            outputs = [Path(str(prefix)+'.'+suffix) for suffix in
+                       ('mlwfHki', 'mlwfKI', 'koopmansBands', 'koopmansScreening')]
+            hashes = [hashlib.sha256(path.read_bytes()).hexdigest() for path in outputs]
+            audit_log = run(folder, 'wannier', frozen, audit=True)
+            assert 'KoopmansResponse: Iter:' not in audit_log
+            assert 'KI symmetry audit complete: no response solves' in audit_log
+            assert re.search(r'KI symmetry audit pairs: (\d+)/(\d+)', audit_log).groups() == (str(solved), str(total))
+            assert hashes == [hashlib.sha256(path.read_bytes()).hexdigest() for path in outputs]
             print(f'{case}, {"empty" if empty else "occupied"}: {solved}/{total} response solves; matrices match', flush=True)
             if launcher:
                 mpi_log = run(folder, 'wannier', frozen, ranks=2)

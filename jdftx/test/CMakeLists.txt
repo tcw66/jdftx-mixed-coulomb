@@ -107,6 +107,9 @@ if(Python3_Interpreter_FOUND AND NUMPY_STATUS EQUAL 0 AND DFPT_H_PSEUDO)
 	add_test(NAME koopmansSpinKI COMMAND ${Python3_EXECUTABLE}
 		${CMAKE_CURRENT_SOURCE_DIR}/koopmans/checkKI.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO} --spin)
 	set_tests_properties(koopmansSpinKI PROPERTIES TIMEOUT 300)
+	add_test(NAME koopmansSpinKIPBE COMMAND ${Python3_EXECUTABLE}
+		${CMAKE_CURRENT_SOURCE_DIR}/koopmans/checkKI.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO} --spin --gga)
+	set_tests_properties(koopmansSpinKIPBE PROPERTIES TIMEOUT 300)
 	add_test(NAME koopmansSymmetry COMMAND ${Python3_EXECUTABLE}
 		${CMAKE_CURRENT_SOURCE_DIR}/koopmans/checkSymmetry.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO})
 	set_tests_properties(koopmansSymmetry PROPERTIES TIMEOUT 300)
@@ -116,6 +119,18 @@ if(Python3_Interpreter_FOUND AND NUMPY_STATUS EQUAL 0 AND DFPT_H_PSEUDO)
 	add_test(NAME koopmansScreeningMesh COMMAND ${Python3_EXECUTABLE}
 		${CMAKE_CURRENT_SOURCE_DIR}/koopmans/checkScreeningMesh.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO})
 	set_tests_properties(koopmansScreeningMesh PROPERTIES TIMEOUT 300)
+	execute_process(COMMAND ${Python3_EXECUTABLE} -c "import scipy"
+		RESULT_VARIABLE SCIPY_STATUS OUTPUT_QUIET ERROR_QUIET)
+	if(SCIPY_STATUS EQUAL 0)
+		add_test(NAME koopmansCoarseWorkflow COMMAND ${Python3_EXECUTABLE}
+			${CMAKE_CURRENT_SOURCE_DIR}/koopmans/checkCoarseWorkflow.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO})
+		set_tests_properties(koopmansCoarseWorkflow PROPERTIES TIMEOUT 600)
+		if(EnableMPI AND MPIEXEC_EXECUTABLE)
+			add_test(NAME koopmansCoarseWorkflowMPI COMMAND ${Python3_EXECUTABLE}
+				${CMAKE_CURRENT_SOURCE_DIR}/koopmans/checkCoarseWorkflow.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO} --launcher ${MPIEXEC_EXECUTABLE})
+			set_tests_properties(koopmansCoarseWorkflowMPI PROPERTIES PROCESSORS 2 TIMEOUT 900)
+		endif()
+	endif()
 	add_test(NAME koopmansOccupied COMMAND ${Python3_EXECUTABLE}
 		${CMAKE_CURRENT_SOURCE_DIR}/koopmans/checkOccupied.py ${CMAKE_BINARY_DIR} ${DFPT_H_PSEUDO})
 	set_tests_properties(koopmansOccupied PROPERTIES TIMEOUT 300)

@@ -1,4 +1,6 @@
-# Full screening q mesh by default. For a convergence comparison, uncomment:
+# Full screening q mesh by default. To start adaptive refinement, uncomment:
 # wannier-koopmans-screening-mesh 4 4 4
 # Each dimension must divide common.in's kpoint-folding. The k integration,
 # orbital sources, bare KI Hamiltonian and output bands keep the full mesh.
+# The initial mesh refines with response reuse (default tolerance 0.005 eV).
+# Append 0 to the command only for a fixed-mesh diagnostic.

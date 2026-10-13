@@ -936,6 +936,21 @@ inline void setMask(size_t iStart, size_t iStop, const double* n, double* mask, 
 {	for(size_t i=iStart; i<iStop; i++) mask[i] = (n[i]<nCut ? 0. : 1.);
 }
 
+// Relative sigma steps vanish at stationary densities. Use the natural GGA
+// scale n^(8/3) as a floor and keep both samples in the physical sigma>=0
+// domain. The mixed derivative is evaluated through density differences.
+inline void sigmaDerivativeSamples(size_t start, size_t stop, const double* n,
+	const double* sigma, double* plus, double* minus, double* denominator,
+	double eps, double nCut)
+{
+	for(size_t i=start;i<stop;i++) {
+		double step=eps*std::max(sigma[i],pow(std::max(n[i],nCut),8./3.));
+		plus[i]=sigma[i]+step;
+		minus[i]=std::max(0.,sigma[i]-step);
+		denominator[i]=(n[i]>=nCut) ? 1./(plus[i]-minus[i]) : 0.;
+	}
+}
+
 void ExCorr::getSecondDerivatives(const ScalarField& n, ScalarField& e_nn, ScalarField& e_sigma, ScalarField& e_nsigma, ScalarField& e_sigmasigma, double nCut, ScalarField* sigma_alt) const
 {
 	//Check for GGAs and meta GGAs:
@@ -957,7 +972,7 @@ void ExCorr::getSecondDerivatives(const ScalarField& n, ScalarField& e_nn, Scala
 	
 	if(needsTau || needsLap) die("Second derivatives implemented only for LDAs and GGAs.\n");
 	
-	const double eps = 1e-7; //Order sqrt(double-precision epsilon)
+	const double eps = 1e-5; //Balance central-difference truncation and cancellation.
 	const double scalePlus = 1.+eps;
 	const double scaleMinus = 1.-eps;
 	const ScalarField nPlus = scalePlus * n;
@@ -969,11 +984,14 @@ void ExCorr::getSecondDerivatives(const ScalarField& n, ScalarField& e_nn, Scala
 	threadLaunch(setMask, gInfo.nr, n->data(), mask->data(), nCut);
 	
 	//Compute gradient-squared for GGA
-	ScalarField sigma, sigmaPlus, sigmaMinus;
+	ScalarField sigma, sigmaPlus, sigmaMinus, sigmaDen;
 	if(needsSigma)
 	{	sigma = sigma_alt ? *sigma_alt : lengthSquared(gradient(n));
-		sigmaPlus = scalePlus * sigma;
-		sigmaMinus = scaleMinus * sigma;
+		sigmaPlus=ScalarFieldData::alloc(gInfo);
+		sigmaMinus=ScalarFieldData::alloc(gInfo);
+		sigmaDen=ScalarFieldData::alloc(gInfo);
+		threadLaunch(sigmaDerivativeSamples,gInfo.nr,n->data(),sigma->data(),
+			sigmaPlus->data(),sigmaMinus->data(),sigmaDen->data(),eps,nCut);
 	}
 	
 	//Configurations of n and sigma, and the gradients w.r.t them:
@@ -1021,9 +1039,9 @@ void ExCorr::getSecondDerivatives(const ScalarField& n, ScalarField& e_nn, Scala
 	ScalarField nDen = (0.5/eps) * inv(n) * mask;
 	e_nn = nDen * (configs[1].e_n - configs[2].e_n);
 	if(needsSigma)
-	{	ScalarField sigmaDen = (0.5/eps) * inv(sigma) * mask;
+	{
 		e_sigma = configs[0].e_sigma*mask; //First derivative available analytically
-		e_nsigma = 0.5*(nDen * (configs[1].e_sigma - configs[2].e_sigma) + sigmaDen * (configs[3].e_n - configs[4].e_n));
+		e_nsigma = nDen * (configs[1].e_sigma - configs[2].e_sigma);
 		e_sigmasigma = sigmaDen * (configs[3].e_sigma - configs[4].e_sigma);
 	}
 	else

@@ -79,7 +79,7 @@ def main():
     frozen = base[:minimize_start]+re.sub(r'nIterations\s+\d+', 'nIterations 0',base[minimize_start:],count=1)
     response = f'wannier-koopmans 0 400 1e-7 yes 1e-6 yes {min(2,args.ranks)} yes\nwannier-koopmans-spin yes\n'
     if args.screening_mesh:
-        response += 'wannier-koopmans-screening-mesh '+' '.join(map(str,args.screening_mesh))+'\n'
+        response += 'wannier-koopmans-screening-mesh '+' '.join(map(str,args.screening_mesh))+' 0\n'
     reference = None
     timings = []
     for label,config in [('coupled','no yes'),('nested-cg','yes yes'),('nested-minres','yes no')]:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check coarse-q quadrature, full-mesh Hamiltonians and SCF restart identity.
+"""Check fixed/adaptive q screening, full Hamiltonians and SCF restart identity.
 
 Usage: checkScreeningMesh.py BUILD H_NC_UPF [--launcher MPIEXEC]
 Set JDFTX_TEST_EXECUTABLE_SUFFIX=_gpu for CUDA. Results use temporary storage.
@@ -12,6 +12,25 @@ import subprocess
 import tempfile
 
 import numpy as np
+from math import erfc, pi, sqrt
+
+
+def image_curvature(mesh):
+    """Independent point-charge Ewald sum for this orthorhombic fixture (Ha)."""
+    lengths = 8*np.asarray(mesh, dtype=float)
+    volume = np.prod(lengths)
+    eta = 3/min(lengths)
+    real = 0.
+    for i in np.ndindex(9, 9, 9):
+        r = np.linalg.norm((np.asarray(i)-4)*lengths)
+        if r:
+            real += erfc(eta*r)/r
+    limits = np.ceil(2*eta*sqrt(-np.log(1e-18))*lengths/(2*pi)).astype(int)
+    axes = [2*pi*np.arange(-n, n+1)/length for n, length in zip(limits, lengths)]
+    g2 = sum(g*g for g in np.meshgrid(*axes, indexing='ij'))
+    nonzero = g2 > 0
+    reciprocal = 4*pi/volume*np.sum(np.exp(-g2[nonzero]/(4*eta**2))/g2[nonzero])
+    return -(real+reciprocal-2*eta/sqrt(pi)-pi/(volume*eta**2))
 
 
 def main():
@@ -28,7 +47,7 @@ def main():
     folder = args.work_dir.resolve() if args.work_dir else Path(temporary.name)
     folder.mkdir(parents=True, exist_ok=True)
 
-    def run(executable, text, label, ranks=1, error=None):
+    def run(executable, text, label, ranks=1, error=None, adaptive=False):
         inp, out = folder/(label+'.in'), folder/(label+'.out')
         inp.write_text(text)
         out.unlink(missing_ok=True)
@@ -42,7 +61,7 @@ def main():
             assert result.returncode and error in log+result.stderr, log[-4000:]+result.stderr
         else:
             assert not result.returncode and log.rstrip().endswith('Done!'), log[-4000:]+result.stderr
-            progress = re.findall(r'KI group (\d+)/(\d+): computed q (\d+)/(\d+), mesh q (\d+)/(\d+)', log)
+            progress = [] if adaptive else re.findall(r'KI group (\d+)/(\d+): computed q (\d+)/(\d+), mesh q (\d+)/(\d+)', log)
             computed = {}
             for group, groups, counter, total, iq, mesh_size in progress:
                 seen = computed.setdefault(int(group), {})
@@ -63,7 +82,8 @@ def main():
                 np.loadtxt(str(prefix)+'.koopmansBands', ndmin=2),
                 np.fromfile(str(prefix)+'.mlwfKI', dtype=dtype)]
 
-    def check_quadrature(prefix, nq, epsilon=2):
+    def check_quadrature(prefix, mesh, epsilon=2):
+        nq = int(np.prod(mesh))
         table = np.loadtxt(str(prefix)+'.koopmansResponse', ndmin=2)
         screening = read(prefix)[0]
         for row in screening:
@@ -72,8 +92,12 @@ def main():
             selected = q[q[:, 8] == 1]
             assert len(q) == 9 and len(selected) == nq
             full_bare = (q[:, 5]+q[:, 7]).mean()
-            screened_bare = (selected[:, 5]+selected[:, 7]).mean()
-            screened_relaxed = (selected[:, 5]+selected[:, 6]+selected[:, 7]/epsilon).mean()
+            screened_bare = (selected[:, 5]+selected[:, 9]).mean()
+            screened_relaxed = (selected[:, 5]+selected[:, 6]+selected[:, 9]/epsilon).mean()
+            # Test the mesh-dependent singularity independently, rather than
+            # reconstructing the implementation's own quadrature only.
+            np.testing.assert_allclose(q[:, 7].mean(), image_curvature((3, 3, 1)), atol=2e-10)
+            np.testing.assert_allclose(selected[:, 9].mean(), image_curvature(mesh), atol=2e-10)
             np.testing.assert_allclose(row[2], full_bare, atol=2e-12, rtol=2e-12)
             np.testing.assert_allclose(row[4], screened_relaxed/screened_bare, atol=2e-12, rtol=2e-12)
             np.testing.assert_allclose(row[3], row[4]*full_bare, atol=2e-12, rtol=2e-12)
@@ -110,15 +134,15 @@ wannier-minimize nIterations 100 knormThreshold 1e-8
         response = 'wannier-koopmans 2 400 1e-9 no 1e-6 yes 1 yes\nwannier-koopmans-spin yes\n'
         run('wannier', frozen+response, prefix.name+'-full')
         reference = read(prefix)
-        full_q = check_quadrature(prefix, 9)
+        full_q = check_quadrature(prefix, (3, 3, 1))
         run('wannier', frozen+response+'wannier-koopmans-screening-mesh 3 3 1\n', prefix.name+'-explicit-full')
         for value, expected in zip(read(prefix), reference):
             np.testing.assert_allclose(value, expected, atol=3e-10, rtol=3e-9)
         for mesh, nq in [('1 3 1', 3), ('1 1 1', 1)]:
-            coarse = frozen+response+f'wannier-koopmans-screening-mesh {mesh}\n'
+            coarse = frozen+response+f'wannier-koopmans-screening-mesh {mesh} 0\n'
             run('wannier', coarse, prefix.name+'-coarse-'+str(nq))
             coarse_reference = read(prefix)
-            table = check_quadrature(prefix, nq)
+            table = check_quadrature(prefix, tuple(map(int, mesh.split())))
             # Bare contributions use the full Wannier mesh in every case;
             # selected responses agree with the exhaustive fine-q calculation.
             np.testing.assert_allclose(table[:, 5], full_q[:, 5], atol=3e-10, rtol=3e-9)
@@ -136,10 +160,70 @@ wannier-minimize nIterations 100 knormThreshold 1e-8
                 assert ('2 active' if nq > 1 else '1 active') in log
                 for value, expected in zip(read(prefix), coarse_reference):
                     np.testing.assert_allclose(value, expected, atol=3e-8, rtol=3e-7)
-                check_quadrature(prefix, nq)
+                check_quadrature(prefix, tuple(map(int, mesh.split())))
+
+        # Default coarse screening refines to the full mesh in this fixture
+        # (only two nested levels). Each retained response is used once;
+        # both Ewald kernels and the final Hamiltonian agree with a direct
+        # full run, for serial execution and independent MPI q groups.
+        fixed_gamma_bands = coarse_reference[1].copy()
+        for ranks in ([1, 2] if args.launcher else [1]):
+            adaptive_input = frozen+response+f'wannier-koopmans-screening-mesh 1 1 1\n'
+            if ranks == 2:
+                adaptive_input = adaptive_input.replace('yes 1 yes\n', 'yes 2 yes\n')
+            log = run('wannier', adaptive_input, prefix.name+f'-adaptive-{ranks}', ranks=ranks, adaptive=True)
+            assert 'full electronic q mesh reached' in log
+            assert '# screening_mode adaptive' in Path(str(prefix)+'.koopmansScreening').read_text()
+            assert int(re.search(r'KI response solves: (\d+)/', log)[1]) == 9
+            for value, expected in zip(read(prefix), reference):
+                np.testing.assert_allclose(value, expected, atol=3e-8, rtol=3e-7)
+            check_quadrature(prefix, (3, 3, 1))
+            # For a one-orbital Hermitian matrix its Frobenius norm is exactly
+            # the eigenvalue change. Empty corrections can depend on k.
+            change = float(re.search(r'screening stage 2:.*change bound (\S+) eV', log)[1])
+            expected_change = np.max(abs(reference[1][:, 3:]-fixed_gamma_bands[:, 3:]))*27.21138505
+            np.testing.assert_allclose(change, expected_change, atol=3e-8, rtol=3e-7)
+
+        # Refinement must also preserve the epsilon=0 neutralizing-background
+        # convention; no empirical dielectric constant is introduced.
+        background = (frozen+response).replace('wannier-koopmans 2 ', 'wannier-koopmans 0 ')
+        run('wannier', background, prefix.name+'-background-full')
+        background_reference = read(prefix)
+        run('wannier', background+'wannier-koopmans-screening-mesh 1 1 1\n',
+            prefix.name+'-background-adaptive', adaptive=True)
+        for value, expected in zip(read(prefix), background_reference):
+            np.testing.assert_allclose(value, expected, atol=3e-8, rtol=3e-7)
         run('wannier', frozen+response+'wannier-koopmans-screening-mesh 2 3 1\n', prefix.name+'-invalid-mesh',
             error='must divide kpoint-folding')
-        print(prefix.name+': coarse weights, full bare Hamiltonian, symmetry and MPI agreement passed', flush=True)
+        run('wannier', frozen+response+'wannier-koopmans-screening-mesh 1 1 1 -1\n', prefix.name+'-invalid-tolerance',
+            error='screening energy tolerance must be finite and nonnegative')
+        print(prefix.name+': fixed/adaptive screening, full bare Hamiltonian, symmetry and MPI agreement passed', flush=True)
+
+    # Exercise acceptance before the full mesh. A deliberately loose
+    # tolerance tests control flow only, not physical mesh convergence.
+    nested_common = common.replace('kpoint-folding 3 3 1', 'kpoint-folding 8 1 1').replace('symmetries automatic', 'symmetries none')
+    run('jdftx', nested_common+'dump-name nested-scf.$VAR\ndump End State BandEigs\n', 'nested-scf')
+    prefix = folder/'nested'
+    nested = nested_common+f'''wannier-initial-state {folder}/nested-scf.$VAR
+wannier-dump-name {prefix}.$VAR
+wannier bStart 0 saveWfns no
+wannier-center Gaussian 4 4 3.3
+wannier-minimize nIterations 100 knormThreshold 1e-8
+'''
+    run('wannier', nested, 'nested-localize')
+    nested = nested.replace('saveWfns no', 'saveWfns no loadRotations yes').replace('nIterations 100 knormThreshold', 'nIterations 0 knormThreshold')
+    nested += 'wannier-koopmans 2 400 1e-9 no 1e-6 yes 1 yes\nwannier-koopmans-spin yes\n'
+    log = run('wannier', nested+'wannier-koopmans-screening-mesh 1 1 1 1e6\n', 'nested-adaptive', adaptive=True)
+    assert 'mesh convergence estimate satisfied' in log
+    assert 'screening stage 3: mesh 4 1 1' in log
+    assert int(re.search(r'KI response solves: (\d+)/', log)[1]) == 4
+    selected = np.loadtxt(str(prefix)+'.koopmansResponse')[:, 8] == 1
+    assert selected.sum() == 4
+    adaptive_reference = read(prefix)
+    run('wannier', nested+'wannier-koopmans-screening-mesh 4 1 1 0\n', 'nested-fixed')
+    for value, expected in zip(read(prefix), adaptive_reference):
+        np.testing.assert_allclose(value, expected, atol=3e-8, rtol=3e-7)
+    print('Two successive refinement checks and early acceptance passed.', flush=True)
 
     # A byte change is caught even when path, size and modification time stay
     # fixed. Global phase leaves the physical state unchanged for comparison.

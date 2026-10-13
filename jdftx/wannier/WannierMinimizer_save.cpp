@@ -65,6 +65,8 @@ void WannierMinimizer::saveMLWF(int iSpin)
 	logFlush();
 	
 	//Save the matrices:
+	if(wannier.koopmansSaveDensities) saveMLWF_KI_densities(iSpin);
+
 	if(mpiWorld->isHead() && wannier.minParams.nIterations) //re-save only if any minimization has occured
 	{	//Write U:
 		string fname = wannier.getFilename(Wannier::FilenameDump, "mlwfU", &iSpin);

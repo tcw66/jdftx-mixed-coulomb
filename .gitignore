@@ -17,3 +17,5 @@ __pycache__/
 /examples/**/*.npz
 /examples/**/results*/
 /examples/**/electron-phonon/
+/examples/koopmans/literature/runs/
+/examples/koopmans/literature/pseudopotentials/
