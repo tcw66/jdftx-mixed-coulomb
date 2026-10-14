@@ -39,13 +39,14 @@ limiting PBE value; the implementation does not fit to the experimental number.
 
 ![Silicon dielectric mesh convergence](validation-convergence.png)
 
-The plot also includes the completed 16³ response with cell and ions relaxed:
-**12.668898** from Berry polarization and **12.655843** from occupied Wannier
-centers. These points are shown separately from the fixed-geometry curve:
-their zero-field lattice constant is 10.350505 bohr, compared with 10.26 bohr
-for the 4³–12³ series. The difference from the 12³ result therefore includes
-both mesh and geometry changes. See the [cell-relaxation](VALIDATION_CELL_16.md)
-and [Wannier](VALIDATION_WANNIER_16.md) reports for their numerical records.
+The plot uses inverse mesh size **1/N**, with zero marking the infinite-mesh
+limit, and includes the 16³ result with **fixed cell and relaxed ions**:
+**12.668863** from Berry polarization and **12.655829** from occupied Wannier
+centers. The 16³ points are shown separately because their fixed reference
+lattice constant is 10.350505 bohr, compared with 10.26 bohr for the 4³–12³
+series. The difference from 12³ includes both mesh and geometry changes;
+no extrapolation is fitted. See the [Wannier comparison](VALIDATION_WANNIER_16.md)
+for the numerical records and the alternative cell-relaxed response.
 Regenerate the PNG and PDF from the committed data with
 `python3 plot_convergence.py` in this directory.
 
