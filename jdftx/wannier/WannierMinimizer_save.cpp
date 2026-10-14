@@ -63,6 +63,22 @@ void WannierMinimizer::saveMLWF(int iSpin)
 		logPrintf("\t[ %lg %lg %lg ] spread: %lg bohr^2\n", rCoords[0], rCoords[1], rCoords[2], rSqExpect[n] - rExpect[n].length_squared());
 	}
 	logFlush();
+	// Full precision is essential for polarization differences at small fields.
+	if(mpiWorld->isHead())
+	{	string fname = wannier.getFilename(Wannier::FilenameDump, "mlwfCenters", &iSpin);
+		logPrintf("Dumping '%s' ... ", fname.c_str()); logFlush();
+		FILE* fp = fopen(fname.c_str(), "w");
+		if(!fp) die_alone("Cannot write Wannier centers.\n");
+		fprintf(fp, "# Cartesian centers (bohr), lattice centers, spread (bohr^2)\n");
+		for(int n=0; n<nCenters; n++)
+		{	const vector3<>& r = rExpect[n];
+			vector3<> x = e.gInfo.invR * r;
+			fprintf(fp, "%.17g %.17g %.17g %.17g %.17g %.17g %.17g\n",
+				r[0], r[1], r[2], x[0], x[1], x[2], rSqExpect[n] - r.length_squared());
+		}
+		if(fclose(fp)) die_alone("Cannot finish writing Wannier centers.\n");
+		logPrintf("done.\n"); logFlush();
+	}
 	
 	//Save the matrices:
 	if(wannier.koopmansSaveDensities) saveMLWF_KI_densities(iSpin);

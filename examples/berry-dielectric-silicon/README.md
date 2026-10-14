@@ -198,6 +198,64 @@ internal DFT energy, electric enthalpy, minimum overlap singular value, occupied
 spin weight, and individual unwrapped string phases and lattice directions.
 It also records the actual lattice matrix and the polarization branch offset.
 The `EfieldBerry` energy component is included in JDFTx's minimized energy.
+
+## Polarization from occupied Wannier centers
+
+After the SCF field calculations converge, compute four maximally localized
+valence-bond Wannier functions for each reference and polarized state:
+
+```bash
+python3 wannier_response.py results-cell-k16/k16 --run --resume
+```
+
+The script uses `build/wannier`; select another build directory with `--build`
+or the CUDA executable with `--gpu`. It prepares inputs without executing
+unless `--run` is supplied. The default processes clamped and cell-relaxed
+states; use `--modes relaxed` to process fixed-cell ionic relaxation as well.
+Reanalyze completed Wannier calculations with `--analyze-only`. Requires
+NumPy and SciPy. Build `wannier` / `wannier_gpu` after updating the sources.
+
+Only the four filled bands are rotated, with no disentanglement or electronic
+minimization. The input uses each state's final lattice and ionic positions.
+Because cell optimization preserves its initial G-vector lists, the script
+checks every initial/final cutoff-basis membership before reading the binary
+wavefunctions. It refuses incompatible bases rather than assuming a matching
+file size proves compatibility. A missing eigenvalue dump is generated with
+zero electronic iterations; polarization uses the original occupied states.
+
+Wannier writes a new, full-precision `.mlwfCenters` text file: three Cartesian
+coordinates in bohr, three lattice coordinates, and the spread in bohr squared
+for each center. The existing six-digit center display is insufficient for
+accurate small-field differences. For spin-degenerate SG15 silicon,
+
+```
+P = (4 sum_I R_I - 2 sum_n r_n + sum_i branch_i a_i) / Omega
+epsilon_ab = delta_ab + 4*pi*(P_a(+h e_b) - P_a(-h e_b))/(2*h)
+```
+
+The four bond centers are matched to the zero-field reference, including
+primitive-cell image shifts and label permutations. Electronic and ionic
+dipoles, the selected branch, and the volume all use the actual final cell.
+The silicon branch is `-1 -1 -1`, as in the SCF workflow. Both field signs
+must have converged Wannier localization; the default gradient threshold is
+`5e-7`, with spread-based stopping disabled. `--resume` verifies input and
+source-file SHA-256 identities before reusing completed outputs.
+
+`wannier-fd/dielectric-wannier.json` records centers, spreads, polarizations
+and the central-difference dielectric columns alongside the Berry results.
+On the completed 16³ calculation, the cell-relaxed Wannier response is
+`epsilon_zz = 12.655843`, compared with `12.668898` from Berry strings.
+These are independently evaluated polarizations of the same SCF states.
+The Wannier calculation uses the Marzari–Vanderbilt finite-difference
+localization measure and a Cartesian neighbor stencil; the enthalpy uses
+determinant phases along primitive reciprocal strings. Their finite-mesh
+estimators need not coincide. JDFTx's
+[Wannier documentation](https://jdftx.org/CommandWannier.html) describes the
+finite-difference measure's quadratic error in mesh spacing and
+the alternative real-space measure. Converge mesh and field amplitude before
+interpreting either result as the continuum dielectric constant.
+See [the Wannier validation report](VALIDATION_WANNIER_16.md) and
+[full-precision results](validation-wannier-k16.json).
 Ordinary dumped subspace eigenvalues are DFT Hamiltonian eigenvalues in the
 occupied field-polarized subspace, not independently diagonalized finite-field
 bands.

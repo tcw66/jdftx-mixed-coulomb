@@ -97,6 +97,8 @@ struct CommandWannier : public Command
 		format = "<key1> <args1...>  <key2> <args2...>  ...";
 		comments =
 			"%Control calculation and output of maximally-localized Wannier functions \\cite MLWF.\n"
+			"Centers and spreads are written at full precision to <dump-name>.mlwfCenters,\n"
+			"with columns x y z (bohr), lattice coordinates, and spread (bohr^2).\n"
 			"The possible <key>'s and their corresponding arguments are:\n"
 			"\n+ addAtomicOrbitals yes|no\n\n"
 			"   Whether to automatically add atomic orbitals for each atom.\n"

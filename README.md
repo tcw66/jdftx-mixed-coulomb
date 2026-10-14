@@ -1557,6 +1557,14 @@ for a 16³ zero-field and symmetric finite-field cell-relaxation calculation.
 The completed [16³ calculation](examples/berry-dielectric-silicon/VALIDATION_CELL_16.md)
 gives `epsilon_zz = 12.668898` with both cell and ions relaxed, and a
 zero-field conventional lattice constant of 5.477251 Å.
+The occupied-state [Wannier calculation](examples/berry-dielectric-silicon/VALIDATION_WANNIER_16.md)
+independently evaluates polarization from four valence-bond centers in each
+polarized cell and gives `epsilon_zz = 12.655843` by the same ±0.0001-field
+finite difference. Run `wannier_response.py results-cell-k16/k16 --run --resume`
+from the silicon example directory. Wannier outputs full-precision centers
+in `.mlwfCenters`; the script matches their cell images and includes ionic
+charges and final cell volumes. The Wannier and Berry formulas have different
+finite-mesh errors, so their values can differ before mesh convergence.
 The [validation report](examples/berry-dielectric-silicon/VALIDATION.md) shows
 silicon's response approaching the experimental value near 12 as the mesh
 is refined, with remaining mesh error. The
