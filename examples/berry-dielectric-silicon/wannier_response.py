@@ -225,7 +225,7 @@ def main():
     directory = args.directory.resolve()
     output = args.output.resolve() if args.output else directory/'wannier-fd'
     metadata = json.loads((directory/'workflow.json').read_text())
-    modes = args.modes or [m for m in metadata.get('modes', ['clamped']) if m != 'relaxed']
+    modes = args.modes or metadata.get('modes', ['clamped'])
     if any(m not in metadata.get('modes', ['clamped']) for m in modes):
         parser.error('requested mode was not computed')
     if args.analyze_only:

@@ -9,7 +9,21 @@ estimates rather than a fully converged dielectric tensor.
 | Calculation | Wannier εzz | Berry εzz |
 | --- | ---: | ---: |
 | Clamped cell and ions | 12.655829 | 12.668863 |
+| Fixed cell, relaxed ions | 12.655829 | 12.668863 |
 | Relaxed cell and ions | 12.655843 | 12.668898 |
+
+The fixed-cell comparison holds the zero-field lattice at **10.350505 bohr**
+while allowing both Si ions to relax independently at each field sign. Both
+SCF runs met the electronic gradient threshold `1e-10` and ionic threshold
+`1e-7`; the largest final Cartesian force was `1.99e-8` Hartree/bohr.
+The ions stayed at `(0,0,0)` and `(1/4,1/4,1/4)` to the dumped precision.
+Independent Wannierization of these states met `|grad|_K < 5e-7` and gave
+`epsilon_zz = 12.655829075`. Its difference from the clamped-ion result is
+`-1.12e-7`, below the established localization precision. There is no resolved
+ionic contribution in this ideal silicon cell. Allowing the cell to relax
+changes the Berry response by only `3.51e-5` and the Wannier response by
+`1.36e-5`. All three choices use the same zero-field reference geometry,
+so this is a direct comparison of the structural constraints at 16³.
 
 ## States and polarization
 
@@ -54,7 +68,7 @@ are stored in [validation-wannier-k16.json](validation-wannier-k16.json).
 
 ## Numerical checks and interpretation
 
-All six reference/field Wannier calculations met the native gradient
+All eight reference/field Wannier calculations met the native gradient
 criterion `|grad|_K < 5e-7`; spread-based stopping was disabled. Fresh
 calculations at `1e-6` changed εzz by 3.6e−7 for the clamped states and
 5.1e−6 for the cell-relaxed states. The small cell-relaxed minus clamped
@@ -79,7 +93,8 @@ Four physical regression checks passed: neutral-cell translation invariance,
 permuted/image-shifted centers and their polarization quantum, a known
 dielectric response with different strained volumes at the two field signs,
 and rejection of an incompatible cutoff basis. Resume checks reused all six
-outputs only after matching inputs and source-file SHA-256 identities.
+original outputs only after matching inputs and source-file SHA-256 identities;
+the two fixed-cell ion-relaxed states were Wannierized independently.
 A full-mesh GPU evaluation of the same converged Wannier rotations agreed
 with the CPU centers within 2.3e−16 bohr and spreads within 4.7e−14 bohr².
 

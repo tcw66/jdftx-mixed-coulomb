@@ -210,8 +210,9 @@ python3 wannier_response.py results-cell-k16/k16 --run --resume
 
 The script uses `build/wannier`; select another build directory with `--build`
 or the CUDA executable with `--gpu`. It prepares inputs without executing
-unless `--run` is supplied. The default processes clamped and cell-relaxed
-states; use `--modes relaxed` to process fixed-cell ionic relaxation as well.
+unless `--run` is supplied. The default processes all available clamped,
+fixed-cell ion-relaxed and cell-relaxed states. Use `--modes`
+to select only the desired relaxation choices.
 Reanalyze completed Wannier calculations with `--analyze-only`. Requires
 NumPy and SciPy. Build `wannier` / `wannier_gpu` after updating the sources.
 

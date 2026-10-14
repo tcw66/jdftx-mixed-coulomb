@@ -25,6 +25,10 @@ def main():
                             if r['mode'] == 'cell-relaxed' and r['amplitude'] == amplitude)
     berry_value = berry_response['dielectric'][2][2]
     wannier_value = wannier_response['dielectric'][2][2]
+    fixed_berry = next(r['dielectric'][2][2] for r in cell['responses']
+                       if r['mode'] == 'relaxed' and r['amplitude'] == amplitude)
+    fixed_wannier = next(r['dielectric'][2][2] for r in wannier['response']
+                         if r['mode'] == 'relaxed' and r['amplitude'] == amplitude)
     np.testing.assert_allclose(wannier_response['berry_dielectric'][2][2], berry_value, atol=1e-12)
     r = np.array(berry_response['reference_lattice'])
     lattice_constant = (4*np.linalg.det(r))**(1/3)
@@ -43,6 +47,8 @@ def main():
             markersize=10, markeredgewidth=1.6, label='Electronic: enthalpy curvature')
     ax.plot(mesh, static, 'x', color='#a93d45', markersize=8, markeredgewidth=1.5,
             label='Relaxed ions, fixed cell')
+    ax.plot(16, fixed_berry, 'x', color='#a93d45', markersize=8,
+            markeredgewidth=1.5, zorder=7)
     # This point uses a different reference geometry; keep it off the fixed-cell line.
     ax.plot(16, berry_value, '*', color='#7a489a', markersize=14,
             label='16³ Berry: relaxed cell + ions', zorder=5)
@@ -51,8 +57,11 @@ def main():
             label='16³ Wannier: relaxed cell + ions', zorder=6)
     ax.axhline(12, color='#686868', linestyle='--', linewidth=1.5,
                label='Experimental reference ≈ 12')
-    ax.annotate(f'16³, relaxed cell + ions\nBerry: {berry_value:.5f}\nWannier: {wannier_value:.5f}',
-                xy=(16, berry_value), xytext=(10.3, 12.92), fontsize=11,
+    ax.annotate('16³: ions relaxed in both cases\n'
+                '                 Fixed cell   Relaxed cell\n'
+                f'Berry          {fixed_berry:.5f}       {berry_value:.5f}\n'
+                f'Wannier      {fixed_wannier:.5f}       {wannier_value:.5f}',
+                xy=(16, berry_value), xytext=(9.6, 13.02), fontsize=10,
                 va='top', arrowprops={'arrowstyle': '-', 'color': '#777777'},
                 bbox={'boxstyle': 'round,pad=.4', 'facecolor': 'white', 'edgecolor': '#dddddd'})
     ax.set_title('Self-consistent dielectric response of silicon', pad=14)
@@ -60,12 +69,12 @@ def main():
     ax.set_ylabel(r'Relative dielectric constant $\epsilon_{zz}$')
     ax.set_xticks(mesh+[16])
     ax.set_xlim(3.4, 17.1)
-    ax.set_ylim(9.35, 13.08)
+    ax.set_ylim(9.35, 13.18)
     ax.grid(axis='y', color='#e8e8e8', linewidth=.8)
     ax.spines[['top', 'right']].set_visible(False)
     ax.legend(loc='lower right', frameon=False, fontsize=10.5)
     fig.text(.09, .045,
-             f'4³–12³: fixed a = 10.26 bohr; 16³: relaxed a = {lattice_constant:.6f} bohr.\n'
+             f'4³–12³: fixed a = 10.26 bohr; 16³ reference a = {lattice_constant:.6f} bohr.\n'
              '|Ez| = 0.0001 a.u.; PBE/SG15; cutoff = 30 Hartree. '
              'Different geometries: not a mesh-only comparison.',
              fontsize=9.5, color='#555555', va='bottom')
