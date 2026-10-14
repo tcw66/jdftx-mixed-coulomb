@@ -21,6 +21,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include <electronic/DefectCoulomb.h>
 #include <electronic/Dump_internal.h>
 #include <electronic/Everything.h>
+#include <electronic/BerryPhase.h>
 #include <electronic/ColumnBundle.h>
 #include <electronic/SpeciesInfo.h>
 #include <electronic/ExactExchange.h>
@@ -69,6 +70,7 @@ void Dump::operator()(DumpFrequency freq, int iter)
 {	if(!e) return;
 	if(!checkInterval(freq, iter)) return; // => don't dump this time
 	curIter = iter; curFreq = freq; //used by getFilename()
+	if(freq==DumpFreq_End && e->berryPhase && e->berryPhase->ready) e->berryPhase->dump(*e);
 	
 	//On SIGQUIT, include State in dump End implicitly to enable restart:
 	if((freq==DumpFreq_End) && killFlag && !count(std::make_pair(DumpFreq_End, DumpState)))

@@ -39,6 +39,7 @@ public:
 	SymmetryMode mode; //!< Symmetry mode (none, automatic or manual)
 
 	Symmetries();
+	void disableReduction() { mode = SymmetriesNone; kReduceUseInversion = false; } //!< retain full k mesh and unsymmetrized fields
 	void setup(const Everything& everything); //!< Phase 1: detect symmetry and make atom positions exactly symmetric
 	void setup(const Everything& everything, bool symmetrizeAtoms); //!< Detect symmetry without changing geometry when symmetrizeAtoms is false
 	void setupMesh(); //!< Phase 2 of setup which computes / checks FFTbox and k-mesh dependent symmetries

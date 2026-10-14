@@ -19,6 +19,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 -------------------------------------------------------------------*/
 
 #include <electronic/Everything.h>
+#include <electronic/BerryPhase.h>
 #include <electronic/DefectCoulomb.h>
 #include <electronic/ElecMinimizer.h>
 #include <electronic/ColumnBundle.h>
@@ -418,6 +419,9 @@ double ElecVars::elecEnergyAndGrad(Energies& ener, ElecGradient* grad, ElecGradi
 	}
 	
 	//Do the single-particle contributions one state at a time to save memory (and for better cache warmth):
+	std::vector<ColumnBundle> fieldGradient;
+	if(e->berryPhase && e->berryPhase->ready)
+		ener.E["EfieldBerry"] = e->berryPhase->evaluate(*e,grad && e->berryPhase->field.isNonzero() ? &fieldGradient : 0);
 	ener.E["KE"] = 0.;
 	ener.E["Enl"] = 0.;
 	bool saveHC = need_Hsub and e->dump.count(std::make_pair(DumpFreq_End, DumpHC));
@@ -427,6 +431,7 @@ double ElecVars::elecEnergyAndGrad(Energies& ener, ElecGradient* grad, ElecGradi
 		if(grad) //Calculate wavefunction gradients:
 		{	const QuantumNumber& qnum = eInfo.qnums[q];
 			if(saveHC) HCsave[q] = HC[q]; //stash HC[q] before modifying it below
+			if(fieldGradient.size()) HC[q] += (1./qnum.weight)*fieldGradient[q]; //all occupations are one
 			HC[q] -= O(C[q]) * Hsub[q]; //Include orthonormality contribution
 			grad->C[q] = HC[q] * (F[q]*qnum.weight);
 			if(Kgrad)

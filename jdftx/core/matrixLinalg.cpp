@@ -317,8 +317,9 @@ matrix cis_grad(const matrix& gradIn, const matrix& Aevecs, const diagMatrix& Ae
 //--------- LU, linear solve and inverse ----------
 
 //Return LU decomposition if calcInv = false and inverse if calcInv = true
-matrix invOrLU(const matrix& A, bool calcInv)
+matrix invOrLU(const matrix& A, bool calcInv, int* permutationSign=0)
 {	int N = A.nRows();
+	if(permutationSign) *permutationSign = 1;
 	assert(N > 0);
 	assert(N == A.nCols());
 	matrix LU(A); //destructible copy
@@ -335,6 +336,10 @@ matrix invOrLU(const matrix& A, bool calcInv)
 		gpuErrorCheck();
 		int info = infoArr.data()[0];
 		if(info<0) { logPrintf("Argument# %d to CuSolver LU decomposition routine Zgetrf is invalid.\n", -info); stackTraceExit(1); }
+		if(permutationSign)
+		{	const int* pivots = iPivot.data();
+			for(int i=0; i<N; i++) if(pivots[i]!=i+1) *permutationSign *= -1;
+		}
 		if(!calcInv) return LU; //rest only needed to calc inv() from LU
 		if(info>0) { logPrintf("CuSolver LU decomposition routine Zgetrf found input matrix to be singular at the %d'th step.\n", info); stackTraceExit(1); }
 		//Calculate inverse:
@@ -351,6 +356,8 @@ matrix invOrLU(const matrix& A, bool calcInv)
 	//LU decomposition (in place):
 	zgetrf_(&N, &N, LU.data(), &N, iPivot.data(), &info);
 	if(info<0) { logPrintf("Argument# %d to LAPACK LU decomposition routine ZGETRF is invalid.\n", -info); stackTraceExit(1); }
+	if(permutationSign)
+		for(int i=0; i<N; i++) if(iPivot[i]!=i+1) *permutationSign *= -1;
 	if(!calcInv) return LU; //rest only needed to calc inv() from LU
 	if(info>0) { logPrintf("LAPACK LU decomposition routine ZGETRF found input matrix to be singular at the %d'th step.\n", info); stackTraceExit(1); }
 	//Compute inverse in place:
@@ -367,6 +374,15 @@ matrix LU(const matrix& A)
 	watch.start();
 	matrix result = invOrLU(A, false);
 	watch.stop();
+	return result;
+}
+
+complex det(const matrix& A)
+{
+	int permutationSign;
+	matrix decomposition = invOrLU(A,false,&permutationSign);
+	complex result(permutationSign,0.);
+	for(int i=0; i<A.nRows(); i++) result *= decomposition(i,i);
 	return result;
 }
 

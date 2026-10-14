@@ -9,6 +9,8 @@ This version of [JDFTx](https://github.com/shankar1729/jdftx) provides:
 - Primitive-cell DFPT phonons and screened electron–phonon matrix elements,
   with periodic/slab electrostatics, Fourier interpolation and response
   solver, symmetry and cache optimizations.
+- Occupied-state Berry-phase bulk polarization and self-consistent finite-field
+  dielectric tensors, with fixed-strain internal-ion relaxation.
 - CPU and CUDA executables in one shared build directory.
 
 This is the main project guide, including the complete mixed Coulomb method
@@ -32,6 +34,7 @@ in the relevant sections.
 - [Primitive-cell DFPT phonons](#primitive-cell-dfpt-phonons)
   - [DFPT input reference](#dfpt-input-reference)
 - [Electron–phonon matrix elements](#electronphonon-matrix-elements)
+- [Berry-phase bulk polarization and static dielectric response](#berry-phase-bulk-polarization-and-static-dielectric-response)
 - [Tests](#tests)
 - [Upstream and license](#upstream-and-license)
 
@@ -39,6 +42,7 @@ in the relevant sections.
 
 | Command | Executable |
 |---|---|
+| [`berry-phase-field`](#berry-phase-bulk-polarization-and-static-dielectric-response) | `jdftx` / `jdftx_gpu` |
 | [`defect-coulomb`](#defect-coulomb) | `jdftx` / `jdftx_gpu` |
 | [`defect-coulomb-center`](#defect-coulomb-center) | `jdftx` / `jdftx_gpu` |
 | [`phonon-dfpt`](#phonon-dfpt) | `jdftx` / `jdftx_gpu` |
@@ -1507,6 +1511,56 @@ includes a complete valence-bond Wannier input. See the
 [DFPT method and format guide](jdftx/doc/tutorials/phonon/DFPT.dox) for phase
 conventions, normalization and supported features.
 
+## Berry-phase bulk polarization and static dielectric response
+
+`berry-phase-field Ex Ey Ez` minimizes the electric enthalpy
+`F = E_DFT - Omega E . (P_electronic + P_ionic)` self-consistently. The Cartesian
+field is the total macroscopic internal field in Hartree atomic units, with
+the physical positive-ion sign convention. For example, add the following to
+an insulating bulk input containing only fully occupied bands:
+
+```text
+berry-phase-field 0 0 0.0001
+electronic-minimize nIterations 1000 energyDiffThreshold 0 knormThreshold 1e-9
+```
+
+The occupied-state Berry overlaps couple neighboring k points while every
+minimization step updates the density, Hartree potential and XC potential.
+No empty-band sum or Wannier construction is required. Wannier functions can
+be computed independently from the converged occupied wavefunctions.
+The minimized energy includes `EfieldBerry`, and each run writes a
+`.polarization` file with electronic, ionic and total polarization, internal
+energy, enthalpy and individual string phases.
+
+Use a neutral insulating cell, norm-conserving pseudopotentials, periodic
+Coulomb interaction, a uniform `kpoint-folding` mesh and constant full
+occupations. The command disables spatial and k-inversion reduction.
+At nonzero field use `electronic-minimize`; `electronic-scf`, fixed-Hamiltonian
+runs, `converge-empty-states`, finite-field DFPT, fluid, stress and lattice
+relaxation are unsupported. Internal-ion relaxation through `ionic-minimize`
+is supported at fixed lattice vectors. Verify the insulating gap separately
+and converge field amplitude and k mesh together to follow a stable branch.
+
+Enable `berry-phase-field 0 0 0` for the full-mesh zero-field reference, then
+restart both field signs from its occupied wavefunctions. Centered polarization
+differences give `epsilon_ab = delta_ab + 4*pi*dP_a/dE_b`; relaxing internal
+ions at each field includes the lattice contribution to the static response.
+The [silicon workflow](examples/berry-dielectric-silicon/README.md) prepares,
+runs and analyzes clamped-ion and relaxed-ion dielectric tensors.
+The [validation report](examples/berry-dielectric-silicon/VALIDATION.md) shows
+silicon's response approaching the experimental value near 12 as the mesh
+is refined, with remaining mesh error. The
+[PRL audit](examples/berry-dielectric-silicon/PRL_AUDIT.md) documents the
+variational derivatives, polarization branches and an independent Quantum
+ESPRESSO comparison agreeing to about 5 parts per million on the same mesh.
+
+Every Berry-phase run, including zero-field references and dry runs, prints
+the method citation in JDFTx's used-feature citation report:
+I. Souza, J. Iniguez and D. Vanderbilt,
+*First-Principles Approach to Insulators in Finite Electric Fields*,
+Phys. Rev. Lett. **89**, 117602 (2002),
+[doi:10.1103/PhysRevLett.89.117602](https://doi.org/10.1103/PhysRevLett.89.117602).
+
 ## Tests
 
 With the targets above built and the test pseudopotentials available:
@@ -1517,6 +1571,18 @@ OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=1 \
 ```
 
 Build products and calculation output are not part of the source repository.
+
+Run the Berry-phase regressions with:
+
+```bash
+OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=1 \
+  ctest --test-dir build -R berryPhase --output-on-failure
+```
+
+Coverage includes variational orbital derivatives, occupied-gauge invariance,
+reciprocal boundary mapping, polarization branches, ionic forces, spin factors,
+shifted and noncubic meshes, CPU/CUDA and MPI, and the silicon finite-field
+workflow with polarization/enthalpy consistency and method-citation checks.
 
 Run the available DFPT regressions with:
 

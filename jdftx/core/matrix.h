@@ -211,7 +211,7 @@ matrix LU(const matrix& A);
 matrix cholesky(const matrix& A, bool upper);
 
 //! Compute the determinant of an arbitrary matrix A (via LU decomposition)
-//! If skipZeros is true, skips diagonal entries in the diagonal of the LU decomposition that are below a tolerance
+//! Includes the sign of the LU row permutation.
 complex det(const matrix& A);
 
 //! Compute the determinant of an diagonal matrix A

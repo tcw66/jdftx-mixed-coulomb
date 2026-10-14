@@ -51,8 +51,12 @@ Basis& Basis::operator=(const Basis& basis)
 	gInfo = basis.gInfo;
 	iInfo = basis.iInfo;
 	nbasis = basis.nbasis;
-	iGarr = basis.iGarr;
-	index = basis.index;
+	// IndexArray/IndexVecArray own raw managed storage; their implicit assignment
+	// would alias that storage and double-free it when copied bases are destroyed.
+	iGarr.init(basis.iGarr.nData(),basis.iGarr.isOnGpu());
+	index.init(basis.index.nData(),basis.index.isOnGpu());
+	if(iGarr.nData()) memcpy(iGarr,basis.iGarr);
+	if(index.nData()) memcpy(index,basis.index);
 	head = basis.head;
 	return *this;
 }

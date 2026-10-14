@@ -42,8 +42,8 @@ public:
 	std::vector<int> head; //!< short list of low G basis locations (used for phase fixing)
 	
 	Basis();
-	Basis(const Basis&); //!< copy by reference
-	Basis& operator=(const Basis&); //!< copy by reference
+	Basis(const Basis&); //!< copy basis indices, retaining grid and ion descriptors
+	Basis& operator=(const Basis&); //!< copy basis indices, retaining grid and ion descriptors
 	size_t generation() const { return cacheGeneration; } //!< changes on construction/setup/assignment, including address reuse
 
 	//! Setup the indices and integer G-vectors within Ecut for kpoint k

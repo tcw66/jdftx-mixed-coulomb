@@ -20,6 +20,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 
 #include <electronic/IonInfo.h>
 #include <electronic/Everything.h>
+#include <electronic/BerryPhase.h>
 #include <electronic/DefectCoulomb.h>
 #include <electronic/SpeciesInfo.h>
 #include <electronic/ExCorr.h>
@@ -312,6 +313,17 @@ double IonInfo::ionicEnergyAndGrad()
 		mpiWorld->allReduceData(force, MPIUtil::ReduceSum);
 	e->symm.symmetrize(forcesNL);
 	forces += forcesNL;
+	// For norm-conserving orbitals at fixed plane-wave coefficients, the Berry
+	// electronic term has no explicit ion-position dependence. At stationarity
+	// its response is included by the field-polarized electronic DFT forces.
+	if(e->berryPhase)
+	{	IonicGradient fieldForces; fieldForces.init(*this);
+		vector3<> latticeField = e->gInfo.RT * e->berryPhase->field;
+		for(size_t sp=0; sp<species.size(); sp++)
+			for(auto& force: fieldForces[sp]) force = species[sp]->Z*latticeField;
+		forces += fieldForces;
+		if(shouldPrintForceComponents) fieldForces.print(*e,globalLog,"forceBerry");
+	}
 	if(shouldPrintForceComponents)
 		forcesNL.print(*e, globalLog, "forceNL");
 	if(computeStress)

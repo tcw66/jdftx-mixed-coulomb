@@ -28,9 +28,15 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include <perturb/SpringConstant.h>
 #include <core/LatticeUtils.h>
 #include <fluid/FluidSolver.h>
+#include <electronic/BerryPhase.h>
 
 void Everything::setup()
 {
+	if(berryPhase)
+	{	berryPhase->ready = false; // do not apply stale Berry links during orbital initialization
+		logPrintf("berry-phase-field: disabling space-group and k-inversion reduction for coupled occupied k points.\n");
+		symm.disableReduction();
+	}
 	//Symmetries (phase 1: lattice+basis dependent)
 	if(vibrations)
 	{	symmUnperturbed = symm;
@@ -149,6 +155,7 @@ void Everything::setup()
 	iInfo.update(ener); //needs to happen before eVars setup for LCAO
 	dump.setup(*this); //in advance of Electronic-frequency dump within LCAO
 	eVars.setup(*this);
+	if(berryPhase) berryPhase->setup(*this);
 
 	//Setup vibrations module:
 	if(vibrations) vibrations->setup(this);

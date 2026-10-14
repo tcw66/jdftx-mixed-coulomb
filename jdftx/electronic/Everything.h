@@ -77,6 +77,7 @@ public:
 	std::shared_ptr<VanDerWaals> vanDerWaals; //! vdw correction calculator for electronic system
 	std::shared_ptr<VanDerWaalsD2> vanDerWaalsFluid; //!< vdW correction calculation for fluid coupling / solvation
 	std::shared_ptr<class Vibrations> vibrations; //! Vibrational mode calculator
+	std::shared_ptr<class BerryPhase> berryPhase; //!< occupied-state finite-field electric enthalpy
 
 	//! Call the setup/initialize routines of all the above in the necessray order
 	void setup();

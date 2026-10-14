@@ -248,20 +248,6 @@ diagMatrix diagDot(const matrix& X, const matrix& Y)
 
 //---------------- Misc matrix ops --------------------
 
-complex det(const matrix& A)
-{
-	matrix decomposition = LU(A);
-	int N = A.nRows();
-	
-	// Multiplies the diagonal entries to get the determinant up to a sign
-	complex determinant(1., 0.);
-	for(int i=0; i<N; i++)
-		determinant *= decomposition(i,i);
-
-	return determinant;
-
-}
-
 double det(const diagMatrix& A)
 {	double determinant = 1.;
 	for(int i=0; i<A.nCols(); i++)

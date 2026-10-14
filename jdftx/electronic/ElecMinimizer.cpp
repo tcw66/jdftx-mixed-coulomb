@@ -29,6 +29,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include <core/ScalarField.h>
 #include <ctime>
 #include <electronic/SCF.h>
+#include <electronic/BerryPhase.h>
 
 void ElecGradient::init(const Everything& e)
 {	eInfo = &e.eInfo;
@@ -226,6 +227,7 @@ double ElecMinimizer::compute(ElecGradient* grad, ElecGradient* Kgrad)
 
 bool ElecMinimizer::report(int iter)
 {
+	if(e.berryPhase) e.berryPhase->acceptPhase();
 	if(e.cntrl.shouldPrintEcomponents)
 	{	//Print the iteration header
 		time_t timenow = time(0);
