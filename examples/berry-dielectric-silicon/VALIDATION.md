@@ -42,9 +42,10 @@ limiting PBE value; the implementation does not fit to the experimental number.
 The plot uses inverse mesh size **1/N**, with zero marking the infinite-mesh
 limit, and includes the 16³ result with **fixed cell and relaxed ions**:
 **12.668863** from Berry polarization and **12.655829** from occupied Wannier
-centers. The 16³ points are shown separately because their fixed reference
-lattice constant is 10.350505 bohr, compared with 10.26 bohr for the 4³–12³
-series. The difference from 12³ includes both mesh and geometry changes;
+centers. The 16³ Berry result is included with the same markers and connecting curve
+as the other meshes; its Wannier comparison remains in the numerical report.
+The 16³ fixed reference lattice constant is 10.350505 bohr, compared with
+10.26 bohr for the 4³–12³ series. The difference from 12³ includes both mesh and geometry changes;
 no extrapolation is fitted. See the [Wannier comparison](VALIDATION_WANNIER_16.md)
 for the numerical records and the alternative cell-relaxed response.
 Regenerate the PNG and PDF from the committed data with
