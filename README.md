@@ -1573,7 +1573,9 @@ variational derivatives, polarization branches and an independent Quantum
 ESPRESSO comparison agreeing to about 5 parts per million on the same mesh.
 
 Every Berry-phase run, including zero-field references and dry runs, prints
-the method citation in JDFTx's used-feature citation report:
+the method citation in JDFTx's used-feature citation report.
+Wannier postprocessing also prints it when the `wannier-initial-state`
+pattern includes the matching native Berry-phase `.polarization` file.
 I. Souza, J. Iniguez and D. Vanderbilt,
 *First-Principles Approach to Insulators in Finite Electric Fields*,
 Phys. Rev. Lett. **89**, 117602 (2002),

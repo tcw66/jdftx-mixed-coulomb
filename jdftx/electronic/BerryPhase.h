@@ -13,6 +13,7 @@ public:
 	vector3<> field;
 	vector3<int> polarizationBranch; //!< total-polarization offset in primitive e R / volume quanta
 	bool ready = false;
+	static void addCitation(); //!< register the electric-enthalpy method for calculations and state postprocessing
 	void setup(const Everything& e);
 	double evaluate(const Everything& e, std::vector<ColumnBundle>* gradient=0);
 	void acceptPhase(); //!< advance the phase branch only at an accepted electronic iterate

@@ -597,7 +597,10 @@ struct CommandWannierFilenames : public Command
 };
 
 struct CommandWannierInitialState : public CommandWannierFilenames
-{	CommandWannierInitialState() : CommandWannierFilenames("initial-state", "state initialization") {}
+{	CommandWannierInitialState() : CommandWannierFilenames("initial-state", "state initialization")
+	{	comments += "\nIf the matching polarization file identifies a Berry-phase electric-enthalpy state,\n"
+			"the finite-electric-field PRL method citation is included in the used-feature report.\n";
+	}
 	string& getTarget(Everything& e) { return ((WannierEverything&)e).wannier.initFilename; }
 }
 commandWannierInitialState;

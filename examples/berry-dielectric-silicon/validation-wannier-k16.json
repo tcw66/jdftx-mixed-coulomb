@@ -1152,6 +1152,24 @@
       "wannier_minus_clamped": -1.1167631797093236e-07,
       "wannier_cell_relaxed_minus_fixed": 1.3608645293317068e-05,
       "berry_cell_relaxed_minus_fixed": 3.5119311732501046e-05
-    }
+    },
+    "wannier_prl_citation_counts": {
+      "zero": 1,
+      "clamped-z-0.0001-minus": 1,
+      "clamped-z-0.0001-plus": 1,
+      "relaxed-z-0.0001-minus": 1,
+      "relaxed-z-0.0001-plus": 1,
+      "cell-zero": 1,
+      "cell-relaxed-z-0.0001-minus": 1,
+      "cell-relaxed-z-0.0001-plus": 1
+    },
+    "citation_regression_cases": [
+      "ordinary",
+      "unrelated",
+      "berry",
+      "berry-duplicate",
+      "berry-mpi",
+      "berry-gpu"
+    ]
   }
 }

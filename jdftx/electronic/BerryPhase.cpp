@@ -161,8 +161,7 @@ void BerryPhase::setup(const Everything& e)
 				stringOffset++;
 			}
 	}
-	Citations::add("Berry-phase electric-enthalpy minimization",+		"I. Souza, J. Iniguez and D. Vanderbilt, First-Principles Approach to Insulators in Finite Electric Fields,\n"
-		"Phys. Rev. Lett. 89, 117602 (2002), doi:10.1103/PhysRevLett.89.117602");
+	addCitation();
 	if(e.eVars.skipWfnsInit) return; // dry run: validate parameters without evaluating absent orbitals
 	ready = true;
 	logPrintf("\nBerry-phase electric enthalpy: physical field [%g %g %g] a.u.; full %d x %d x %d occupied mesh.\n",
@@ -171,6 +170,12 @@ void BerryPhase::setup(const Everything& e)
 	referencePhase.clear();
 	if(!std::isfinite(evaluate(e)))
 		die("Cannot initialize Berry polarization: adjacent occupied overlaps are singular or nonfinite; improve the initial state / k mesh.\n");
+}
+
+void BerryPhase::addCitation()
+{	Citations::add("Berry-phase electric-enthalpy minimization",
+		"I. Souza, J. Iniguez and D. Vanderbilt, First-Principles Approach to Insulators in Finite Electric Fields,\n"
+		"Phys. Rev. Lett. 89, 117602 (2002), doi:10.1103/PhysRevLett.89.117602");
 }
 
 void BerryPhase::acceptPhase()

@@ -19,10 +19,12 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 
 #include <electronic/Everything.h>
 #include <electronic/ColumnBundle.h>
+#include <electronic/BerryPhase.h>
 #include <core/matrix.h>
 #include <core/Util.h>
 #include <commands/parser.h>
 #include <wannier/Wannier.h>
+#include <fstream>
 
 //Program entry point
 int main(int argc, char** argv)
@@ -52,6 +54,16 @@ int main(int argc, char** argv)
 	
 	//Setup:
 	e.setup();
+	// Retain the method citation when postprocessing electric-enthalpy states.
+	bool berryState = false;
+	if(mpiWorld->isHead())
+	{	std::ifstream polarization(e.wannier.getFilename(Wannier::FilenameInit, "polarization").c_str());
+		std::string header;
+		if(std::getline(polarization, header))
+			berryState = header.find("# Berry-phase polarization:") == 0;
+	}
+	mpiWorld->bcast(berryState);
+	if(berryState) BerryPhase::addCitation();
 	Citations::print();
 	if(ip.dryRun)
 	{	logPrintf("Dry run successful: commands are valid and initialization succeeded.\n");

@@ -271,7 +271,8 @@ def main():
                              or max(p.stat().st_mtime_ns for p in sources) > eigs.stat().st_mtime_ns):
                 execute('jdftx', eig_name)
             options += ['eigsOverride', str(eigs)]
-        text = (common + f'wannier-initial-state {directory}/{name}.$VAR\n'
+        text = (common + '# Electric-enthalpy provenance: matching initial-state .polarization file\n'
+                f'wannier-initial-state {directory}/{name}.$VAR\n'
                 f'wannier-dump-name {output}/{name}.$VAR\n')
         if args.resume:
             options += ['loadRotations', 'yes']

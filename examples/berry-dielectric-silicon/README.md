@@ -218,6 +218,15 @@ NumPy and SciPy. Build `wannier` / `wannier_gpu` after updating the sources.
 
 Only the four filled bands are rotated, with no disentanglement or electronic
 minimization. The input uses each state's final lattice and ionic positions.
+Wannier runs automatically retain the Souza–Íñiguez–Vanderbilt PRL citation
+when the `wannier-initial-state` pattern has a matching native Berry-phase
+`.polarization` file, including for zero-field references and dry runs.
+Keep that file alongside the occupied wavefunctions and eigenvalues when
+moving an enthalpy state to another directory. Ordinary Wannier inputs without
+this Berry-phase provenance retain their usual citation report.
+Check citation detection and deduplication with
+`python3 check_wannier_citation.py`; add `--mpi` and
+`--gpu-build /path/to/build-gpu` to check those executables too.
 Because cell optimization preserves its initial G-vector lists, the script
 checks every initial/final cutoff-basis membership before reading the binary
 wavefunctions. It refuses incompatible bases rather than assuming a matching
