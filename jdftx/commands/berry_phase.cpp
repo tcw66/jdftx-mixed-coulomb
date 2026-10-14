@@ -12,7 +12,8 @@ struct CommandBerryPhaseField : public Command
 			"and a uniform kpoint-folding mesh. Disables spatial and k-inversion symmetry reduction.\n"
 			"Use electronic-minimize (no electronic-scf at nonzero E); Hartree and XC update at every step.\n"
 			"Initialize weak-field runs from the same converged zero-field wavefunctions.\n"
-			"Internal-ion relaxation at fixed strain is supported; stress and lattice relaxation are not.\n"
+			"Ionic and lattice relaxation and stress are supported at fixed Cartesian E.\n"
+			"For cell relaxation, select a physical polarization branch with berry-phase-branch.\n"
 			"Writes $VAR=polarization at End, including electronic/ionic polarization and enthalpy.\n"
 			"Use E=0 for zero-field Berry polarization. Wannier analysis is independent postprocessing.";
 		forbid("electric-field");
@@ -27,3 +28,19 @@ struct CommandBerryPhaseField : public Command
 	void printStatus(Everything& e,int)
 	{	for(int a=0; a<3; a++) logPrintf("%g ",e.berryPhase->field[a]); }
 } commandBerryPhaseField;
+
+struct CommandBerryPhaseBranch : public Command
+{
+	CommandBerryPhaseBranch() : Command("berry-phase-branch","jdftx/Electronic/Parameters")
+	{	format = "<n1> <n2> <n3>";
+		comments = "Shift the total polarization by sum_i n_i a_i / volume, in integer electronic-charge quanta.\n"
+			"Default: 0 0 0. The offset follows the lattice during strain at fixed Cartesian field.\n"
+			"Select the branch corresponding to the physical surface-charge boundary condition before relaxing the cell.\n"
+			"For the supplied diamond-silicon geometry, -1 -1 -1 gives the nonpolar branch.";
+		require("berry-phase-field");
+	}
+	void process(ParamList& pl, Everything& e)
+	{	for(int d=0; d<3; d++) pl.get(e.berryPhase->polarizationBranch[d],0,d==0 ? "n1" : d==1 ? "n2" : "n3",true); }
+	void printStatus(Everything& e,int)
+	{	for(int d=0; d<3; d++) logPrintf("%d ",e.berryPhase->polarizationBranch[d]); }
+} commandBerryPhaseBranch;

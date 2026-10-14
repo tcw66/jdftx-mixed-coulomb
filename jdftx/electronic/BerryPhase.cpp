@@ -1,16 +1,88 @@
 #include <electronic/BerryPhase.h>
 #include <electronic/Everything.h>
 #include <electronic/SpeciesInfo.h>
+#include <core/BlasExtra.h>
+#include <core/GpuUtil.h>
 #include <map>
 #include <array>
 #include <algorithm>
 #include <cmath>
+
+extern "C" {
+void zgesvd_(char*,char*,int*,int*,complex*,int*,double*,complex*,int*,complex*,int*,complex*,int*,double*,int*);
+void zgetrf_(int*,int*,complex*,int*,int*,int*);
+}
 
 namespace {
 int meshIndex(const vector3<int>& x, const vector3<int>& n)
 { return (x[0]*n[1]+x[1])*n[2]+x[2]; }
 std::array<int,3> key(const vector3<int>& x)
 { return {{x[0],x[1],x[2]}}; }
+matrix occupiedOverlap(const ColumnBundle& left, const ColumnBundle& right, double volume)
+{
+	// Mapping and MPI replication already put these coefficients on the CPU.
+	// For small occupied manifolds, avoid uploading each neighbor pair for a
+	// tiny GPU matrix product followed immediately by a CPU SVD.
+	if(left.nCols()>32) return volume*(left^right);
+	matrix result(left.nCols(),right.nCols());
+	eblas_zgemm(CblasConjTrans,CblasNoTrans,left.nCols(),right.nCols(),left.colLength(),
+		volume,left.data(),left.colLength(),right.data(),right.colLength(),0.,result.data(),left.nCols());
+	return result;
+}
+double occupiedSVD(const matrix& overlap, matrix& u, diagMatrix& singular, matrix& vdag)
+{
+	int n = overlap.nRows();
+	if(n>32)
+	{	overlap.svd(u,singular,vdag);
+		complex determinant = det(u*vdag);
+		return std::atan2(determinant.imag(),determinant.real());
+	}
+	// The general matrix SVD/copy helpers prefer GPU memory even in their
+	// small-matrix LAPACK fallback. Keep the whole tiny factorization on CPU.
+	u.init(n,n); vdag.init(n,n); singular.resize(n);
+	const complex* data = overlap.data();
+	std::vector<complex> a(data,data+n*n), work(8*n*n+8*n);
+	std::vector<double> rwork(5*n);
+	char job = 'A'; int lwork = work.size(), info = 0;
+	zgesvd_(&job,&job,&n,&n,a.data(),&n,singular.data(),u.data(),&n,vdag.data(),&n,
+		work.data(),&lwork,rwork.data(),&info);
+	if(info) return NAN;
+	// Sum LU diagonal arguments, including pivot parity, to avoid multiplying
+	// small determinants. SVD still supplies the singular-value guard / inverse.
+	a.assign(data,data+n*n);
+	std::vector<int> pivot(n);
+	zgetrf_(&n,&n,a.data(),&n,pivot.data(),&info);
+	if(info) return NAN;
+	double phase = 0.;
+	for(int j=0; j<n; j++)
+	{	phase += std::atan2(a[j*(n+1)].imag(),a[j*(n+1)].real());
+		if(pivot[j]!=j+1) phase += M_PI;
+	}
+	return std::remainder(phase,2*M_PI);
+}
+matrix occupiedInverse(const matrix& u, const diagMatrix& singular, const matrix& vdag)
+{
+	int n = u.nRows();
+	if(n>32) return dagger(vdag)*inv(singular)*dagger(u);
+	matrix result(n,n);
+	const complex* ud = u.data(); const complex* vd = vdag.data();
+	complex* out = result.data();
+	for(int j=0; j<n; j++) for(int i=0; i<n; i++)
+	{	complex value = 0.;
+		for(int k=0; k<n; k++) value += conj(vd[i*n+k])*conj(ud[k*n+j])/singular[k];
+		out[j*n+i] = value;
+	}
+	return result;
+}
+void addOccupiedProduct(ColumnBundle& result, const ColumnBundle& states, const matrix& inverse, complex scale, bool adjoint)
+{
+	if(inverse.nRows()>32)
+	{	result += scale*ColumnBundle(states*(adjoint ? dagger(inverse) : scaled<matrix>(inverse)));
+		return;
+	}
+	eblas_zgemm(CblasNoTrans,adjoint ? CblasConjTrans : CblasNoTrans,states.colLength(),states.nCols(),states.nCols(),
+		scale,states.data(),states.colLength(),inverse.data(),states.nCols(),1.,result.data(),result.colLength());
+}
 }
 
 void BerryPhase::setup(const Everything& e)
@@ -32,8 +104,8 @@ void BerryPhase::setup(const Everything& e)
 	if(e.coulombParams.geometry != CoulombParams::Periodic || e.coulombParams.Efield.length_squared()
 		|| e.eVars.fluidParams.fluidType != FluidNone)
 		die("berry-phase-field requires periodic Coulomb interaction, no electric-field, and no fluid.\n");
-	if(e.iInfo.computeStress || e.latticeMinParams.nIterations || e.vibrations || e.iInfo.ljOverride)
-		die("berry-phase-field supports fixed-strain electronic and internal-ion minimization; stress, lattice relaxation and vibrations are unsupported.\n");
+	if(e.vibrations || e.iInfo.ljOverride || e.ionicDynParams.nSteps)
+		die("berry-phase-field does not support vibrations, ionic dynamics or pair-potential overrides.\n");
 	for(auto sp: e.iInfo.species)
 		if(sp->isUltrasoft()) die("berry-phase-field currently requires norm-conserving pseudopotentials; ultrasoft Berry overlaps/forces are not implemented.\n");
 	double ionCharge = 0.;
@@ -136,10 +208,19 @@ double BerryPhase::evaluate(const Everything& e, std::vector<ColumnBundle>* grad
 	// Replicate occupied states only. All ranks evaluate identical string phases;
 	// each rank accumulates derivatives only for the k points it owns.
 	std::vector<ColumnBundle> states(ei.nStates);
+	std::vector<complex> broadcastBuffer;
 	for(int q=0; q<ei.nStates; q++)
 	{	if(ei.isMine(q)) states[q] = e.eVars.C[q];
 		else states[q].init(ei.nBands,e.basis[q].nbasis*ei.spinorLength(),&e.basis[q],&ei.qnums[q]);
-		mpiWorld->bcast(states[q].data(),states[q].nData(),ei.whose(q));
+		if(isGpuEnabled() && mpiWorld->nProcesses()>1)
+		{	// MPI shared-memory transfers must use ordinary host storage, rather
+			// than managed allocations that can still be migrating from the GPU.
+			broadcastBuffer.resize(states[q].nData());
+			if(ei.isMine(q)) std::copy(states[q].data(),states[q].data()+states[q].nData(),broadcastBuffer.begin());
+			mpiWorld->bcast(broadcastBuffer.data(),broadcastBuffer.size(),ei.whose(q));
+			if(!ei.isMine(q)) std::copy(broadcastBuffer.begin(),broadcastBuffer.end(),states[q].data());
+		}
+		else mpiWorld->bcast(states[q].data(),states[q].nData(),ei.whose(q));
 	}
 	if(gradient)
 	{	gradient->assign(ei.nStates,ColumnBundle());
@@ -153,22 +234,22 @@ double BerryPhase::evaluate(const Everything& e, std::vector<ColumnBundle>* grad
 	minOverlap = 1.;
 	for(const auto& link: links)
 	{	ColumnBundle right = forward(states[link.next],e,link);
-		matrix overlap = volume * (states[link.q]^right);
+		matrix overlap = occupiedOverlap(states[link.q],right,volume);
 		matrix u, vdag; diagMatrix singular;
-		overlap.svd(u,singular,vdag);
+		double linkPhase = occupiedSVD(overlap,u,singular,vdag);
+		if(!std::isfinite(linkPhase)) return NAN;
 		double smallest = *std::min_element(singular.begin(),singular.end());
 		if(!std::isfinite(smallest) || smallest < 1e-8) return NAN; // invalid trial: let the line search backtrack
 		minOverlap = std::min(minOverlap,smallest);
-		complex determinant = det(u*vdag); // phase only; avoids determinant underflow
-		phase[link.string] += std::atan2(determinant.imag(),determinant.real());
+		phase[link.string] += linkPhase;
 		if(gradient)
 		{	const int d = link.direction;
 			double ea = 0.; for(int a=0; a<3; a++) ea += field[a]*e.gInfo.R(a,d);
 			double coefficient = ei.spinWeight*ea/(2*M_PI*(ei.nStates/ei.nSpins()/mesh[d]));
 			if(coefficient)
-			{	matrix inverse = dagger(vdag)*inv(singular)*dagger(u);
-				if(ei.isMine(link.q)) (*gradient)[link.q] += complex(0.,0.5*coefficient*volume) * ColumnBundle(right*inverse);
-				if(ei.isMine(link.next)) (*gradient)[link.next] += complex(0.,-0.5*coefficient*volume) * ColumnBundle(backward(states[link.q],e,link)*dagger(inverse));
+			{	matrix inverse = occupiedInverse(u,singular,vdag);
+				if(ei.isMine(link.q)) addOccupiedProduct((*gradient)[link.q],right,inverse,complex(0.,0.5*coefficient*volume),false);
+				if(ei.isMine(link.next)) addOccupiedProduct((*gradient)[link.next],backward(states[link.q],e,link),inverse,complex(0.,-0.5*coefficient*volume),true);
 			}
 		}
 	}
@@ -211,8 +292,19 @@ double BerryPhase::evaluate(const Everything& e, std::vector<ColumnBundle>* grad
 		for(int a=0; a<3; a++) electronic[a] += e.gInfo.R(a,link.direction)*coefficient;
 	}
 	currentPhase = std::move(unwrappedPhase);
+	electronic += (1./volume)*(e.gInfo.R*vector3<>(polarizationBranch));
 	for(auto sp: e.iInfo.species) for(const auto& pos: sp->atpos) ionic += (sp->Z/volume)*(e.gInfo.R*pos);
 	return -volume*dot(field,electronic+ionic);
+}
+
+matrix3<> BerryPhase::latticeGradient(const Everything& e) const
+{
+	// At fixed normalized reduced-coordinate orbitals and fractional ions, the
+	// phases are strain-independent and the dipole transforms as D -> (1+eta) D.
+	// Thus d(-E.D)/d eta = -E (x) D at fixed Cartesian E [SIV, Eq. (6)].
+	// LatticeMinimizer varies symmetric strain; exclude the rigid-rotation torque.
+	vector3<> dipole = e.gInfo.detR*(electronic+ionic);
+	return -0.5*(outer(field,dipole)+outer(dipole,field));
 }
 
 void BerryPhase::dump(const Everything& e)
@@ -235,6 +327,8 @@ void BerryPhase::dump(const Everything& e)
 		fprintf(fp,"enthalpy %.16e\n",double(e.ener.E)-e.ener.E["EfieldBerry"]+coupling);
 		fprintf(fp,"min_overlap %.16e\n",minOverlap);
 		fprintf(fp,"spin_weight %d\n",e.eInfo.spinWeight);
+		fprintf(fp,"polarization_branch %d %d %d\n",polarizationBranch[0],polarizationBranch[1],polarizationBranch[2]);
+		fprintf(fp,"lattice"); for(int a=0; a<3; a++) for(int d=0; d<3; d++) fprintf(fp," %.16e",e.gInfo.R(a,d)); fprintf(fp,"\n");
 		fprintf(fp,"berry_phases"); for(double phase: currentPhase) fprintf(fp," %.16e",phase); fprintf(fp,"\n");
 		fprintf(fp,"berry_phase_directions"); for(int direction: phaseDirection) fprintf(fp," %d",direction); fprintf(fp,"\n");
 		fclose(fp);

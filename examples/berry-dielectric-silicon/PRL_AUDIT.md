@@ -15,6 +15,7 @@ used to establish correctness.
 | Occupied-gauge invariance | Final subspace diagonalization rotates only occupied states; it does not replace the polarized subspace with independent-k ground-state eigenvectors. Gauge-rotation regressions pass. |
 | Exclude independent-k cleanup and zero-field response Hessians | The review found that `converge-empty-states yes` calls an independent-k band minimizer even when all stored bands are occupied. This could undo finite-field polarization after convergence and is now rejected. `perturb-minimize` and `phonon-dfpt` combinations are also rejected because those Hessians lack the Berry coupling. |
 | Force discussion, page 3 | For norm-conserving orbitals at fixed lattice, the electronic Berry term has no explicit ion-position derivative. Standard DFT forces on polarized states plus `Z_I E` therefore give the stationary enthalpy forces. The existing implementation is correct; ultrasoft augmentation remains unsupported. |
+| Strain and electrical boundary conditions, Eqs. (5)–(6) | Cell relaxation keeps Cartesian E fixed. Its explicit enthalpy strain derivative is `-Omega sym(E outer P_total)`, added to the ordinary DFT stress evaluated on polarized orbitals. JDFTx varies symmetric strain, so the rotational torque is projected out. The branch offset `sum_i n_i a_i/Omega` deforms with the lattice; silicon uses its nonpolar branch. All six strain derivatives are checked numerically for both the field term and full enthalpy. |
 | Finite mesh and local minima, pages 2–3 | A finite mesh is essential. The workflow now reports `N_i |E.a_i| / Egap` and rejects values at or above one, using an independently computed sampled gap. This is an estimate, not a rigorous breakdown criterion. |
 | Secular branch of the line-search energy, Fig. 1 | The original implementation kept the initial string references permanently. It was locally correct for the tested small fields, but could reset a phase at a fixed cut for larger cumulative changes. References now advance at accepted iterates, remain fixed during trials, and permit continuation across polarization quanta. Large phase changes and singular trial overlaps trigger backtracking. |
 | Fractional quantum on a single string, page 3 | The analyzer originally rounded only the total polarization to whole lattice quanta. It now aligns individual string phases before averaging and applies the corresponding exact dipole correction to enthalpy. This handles a string shift of `f a_i/(Omega*Ntransverse)`. |
@@ -55,7 +56,10 @@ are preserved in `results-prl-qe`; fresh JDFTx inputs and outputs are in
 
 ## Additional checks and remaining limits
 
-Eight Berry-specific CTest regressions pass on CPU, GPU, and MPI. New tests
+Nine Berry-specific CTest regressions pass on CPU, GPU, MPI and combined
+GPU/MPI. GPU/MPI state broadcasts use ordinary host staging to avoid MPI
+shared-memory access to migrating managed allocations. A 16³ fixed-state
+comparison also passes on two GPUs. New tests
 walk electronic polarization forward and backward through multiple quanta,
 verify rejected trials leave the accepted branch unchanged, exercise a 3×4×5
 mesh, and check fractional-string branch corrections to both polarization
@@ -69,6 +73,7 @@ its own. The example workflow checks it independently. A nonsingular overlap
 does not by itself prove stability below Zener breakdown. These calculations
 target local weak-field insulating states; convergence versus field, mesh,
 cutoff, and ionic force tolerance remains necessary. The 12³ result of
-12.2689 is still a finite-mesh value. Norm-conserving internal-ion relaxation
-at fixed strain is supported; ultrasoft/PAW augmentation and strain response
-are outside the implemented scope.
+12.2689 is still a finite-mesh value. Norm-conserving internal-ion and cell
+relaxation are supported at fixed Cartesian field. Ultrasoft/PAW augmentation,
+finite-field DFPT, lattice dynamics and rigid-rotation torque response remain
+outside the implemented scope.

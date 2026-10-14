@@ -10,7 +10,7 @@ This version of [JDFTx](https://github.com/shankar1729/jdftx) provides:
   with periodic/slab electrostatics, Fourier interpolation and response
   solver, symmetry and cache optimizations.
 - Occupied-state Berry-phase bulk polarization and self-consistent finite-field
-  dielectric tensors, with fixed-strain internal-ion relaxation.
+  dielectric tensors, with ionic and unit-cell relaxation.
 - CPU and CUDA executables in one shared build directory.
 
 This is the main project guide, including the complete mixed Coulomb method
@@ -43,6 +43,7 @@ in the relevant sections.
 | Command | Executable |
 |---|---|
 | [`berry-phase-field`](#berry-phase-bulk-polarization-and-static-dielectric-response) | `jdftx` / `jdftx_gpu` |
+| [`berry-phase-branch`](#berry-phase-bulk-polarization-and-static-dielectric-response) | `jdftx` / `jdftx_gpu` |
 | [`defect-coulomb`](#defect-coulomb) | `jdftx` / `jdftx_gpu` |
 | [`defect-coulomb-center`](#defect-coulomb-center) | `jdftx` / `jdftx_gpu` |
 | [`phonon-dfpt`](#phonon-dfpt) | `jdftx` / `jdftx_gpu` |
@@ -1536,9 +1537,13 @@ Use a neutral insulating cell, norm-conserving pseudopotentials, periodic
 Coulomb interaction, a uniform `kpoint-folding` mesh and constant full
 occupations. The command disables spatial and k-inversion reduction.
 At nonzero field use `electronic-minimize`; `electronic-scf`, fixed-Hamiltonian
-runs, `converge-empty-states`, finite-field DFPT, fluid, stress and lattice
-relaxation are unsupported. Internal-ion relaxation through `ionic-minimize`
-is supported at fixed lattice vectors. Verify the insulating gap separately
+runs, `converge-empty-states`, finite-field DFPT, fluid, ionic dynamics and
+vibrations are unsupported. `ionic-minimize` relaxes internal positions at
+fixed lattice; `lattice-minimize` relaxes both positions and cell at fixed
+Cartesian field, including the explicit Berry contribution to stress.
+For cell relaxation, choose the physical polarization branch with
+`berry-phase-branch n1 n2 n3`; the silicon example selects `-1 -1 -1` for
+its nonpolar branch. Verify the insulating gap separately
 and converge field amplitude and k mesh together to follow a stable branch.
 
 Enable `berry-phase-field 0 0 0` for the full-mesh zero-field reference, then
@@ -1546,7 +1551,12 @@ restart both field signs from its occupied wavefunctions. Centered polarization
 differences give `epsilon_ab = delta_ab + 4*pi*dP_a/dE_b`; relaxing internal
 ions at each field includes the lattice contribution to the static response.
 The [silicon workflow](examples/berry-dielectric-silicon/README.md) prepares,
-runs and analyzes clamped-ion and relaxed-ion dielectric tensors.
+runs and analyzes clamped-ion, fixed-cell relaxed-ion and cell-relaxed
+dielectric tensors. Use `--mesh 16 --fields 0.0001 --axes z --relax-cell`
+for a 16³ zero-field and symmetric finite-field cell-relaxation calculation.
+The completed [16³ calculation](examples/berry-dielectric-silicon/VALIDATION_CELL_16.md)
+gives `epsilon_zz = 12.668898` with both cell and ions relaxed, and a
+zero-field conventional lattice constant of 5.477251 Å.
 The [validation report](examples/berry-dielectric-silicon/VALIDATION.md) shows
 silicon's response approaching the experimental value near 12 as the mesh
 is refined, with remaining mesh error. The

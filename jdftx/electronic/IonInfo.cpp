@@ -323,6 +323,7 @@ double IonInfo::ionicEnergyAndGrad()
 			for(auto& force: fieldForces[sp]) force = species[sp]->Z*latticeField;
 		forces += fieldForces;
 		if(shouldPrintForceComponents) fieldForces.print(*e,globalLog,"forceBerry");
+		if(computeStress) E_RRT += e->berryPhase->latticeGradient(*e);
 	}
 	if(shouldPrintForceComponents)
 		forcesNL.print(*e, globalLog, "forceNL");

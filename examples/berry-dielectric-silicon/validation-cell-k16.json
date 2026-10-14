@@ -1,0 +1,638 @@
+{
+  "mesh": [
+    16,
+    16,
+    16
+  ],
+  "cutoff_Hartree": 30.0,
+  "field_amplitudes_au": [
+    0.0001
+  ],
+  "axes": [
+    "z"
+  ],
+  "electronic_gradient_threshold": 1e-10,
+  "joint_cell_gradient_threshold": 1e-06,
+  "polarization_branch": [
+    -1,
+    -1,
+    -1
+  ],
+  "responses": [
+    {
+      "amplitude": 0.0001,
+      "mode": "clamped",
+      "dielectric": [
+        [
+          null,
+          null,
+          0.004757092387662438
+        ],
+        [
+          null,
+          null,
+          0.004757093483724499
+        ],
+        [
+          null,
+          null,
+          12.668863241481157
+        ]
+      ],
+      "curvature": {
+        "z": 12.66867391960124
+      },
+      "reference": "zero",
+      "reference_volume": 277.220023755464,
+      "reference_lattice": [
+        [
+          0.0,
+          5.175252377902025,
+          5.175252377902025
+        ],
+        [
+          5.175252377902025,
+          0.0,
+          5.175252377902025
+        ],
+        [
+          5.175252377902025,
+          5.175252377902025,
+          0.0
+        ]
+      ]
+    },
+    {
+      "amplitude": 0.0001,
+      "mode": "relaxed",
+      "dielectric": [
+        [
+          null,
+          null,
+          0.004757092387671295
+        ],
+        [
+          null,
+          null,
+          0.0047570934837137
+        ],
+        [
+          null,
+          null,
+          12.66886324148116
+        ]
+      ],
+      "curvature": {
+        "z": 12.668673935705675
+      },
+      "reference": "zero",
+      "reference_volume": 277.220023755464,
+      "reference_lattice": [
+        [
+          0.0,
+          5.175252377902025,
+          5.175252377902025
+        ],
+        [
+          5.175252377902025,
+          0.0,
+          5.175252377902025
+        ],
+        [
+          5.175252377902025,
+          5.175252377902025,
+          0.0
+        ]
+      ]
+    },
+    {
+      "amplitude": 0.0001,
+      "mode": "cell-relaxed",
+      "dielectric": [
+        [
+          null,
+          null,
+          0.004756936296403085
+        ],
+        [
+          null,
+          null,
+          0.00475693700966015
+        ],
+        [
+          null,
+          null,
+          12.668898360792893
+        ]
+      ],
+      "curvature": {
+        "z": 12.668705282987169
+      },
+      "reference": "cell-zero",
+      "reference_volume": 277.220023755464,
+      "reference_lattice": [
+        [
+          0.0,
+          5.175252377902025,
+          5.175252377902025
+        ],
+        [
+          5.175252377902025,
+          0.0,
+          5.175252377902025
+        ],
+        [
+          5.175252377902025,
+          5.175252377902025,
+          0.0
+        ]
+      ]
+    }
+  ],
+  "field_gap_ratios": [
+    {
+      "amplitude": 0.0001,
+      "axis": "z",
+      "directional_ratios": [
+        0.3700657508660979,
+        0.3700657508660979,
+        0.0
+      ],
+      "maximum": 0.3700657508660979
+    }
+  ],
+  "calculations": {
+    "equilibrate": {
+      "field_au": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "total_polarization_e_per_bohr2": [
+        2.0816681711721685e-17,
+        -8.326672684688674e-17,
+        6.245004513516506e-17
+      ],
+      "lattice_bohr": [
+        [
+          0.0,
+          5.175252377902025,
+          5.175252377902025
+        ],
+        [
+          5.175252377902025,
+          0.0,
+          5.175252377902025
+        ],
+        [
+          5.175252377902025,
+          5.175252377902025,
+          0.0
+        ]
+      ],
+      "volume_bohr3": 277.220023755464,
+      "conventional_volume_equivalent_lattice_constant_bohr": 10.350504755804048,
+      "enthalpy_Hartree": -7.883397087856592,
+      "minimum_overlap": 0.9089070234113227,
+      "final_electronic_gradient": 5.261e-11,
+      "stress_Hartree_per_bohr3": [
+        [
+          -4.44262e-10,
+          -1.31329e-12,
+          -1.94421e-12
+        ],
+        [
+          -1.31329e-12,
+          -4.44477e-10,
+          -1.27342e-13
+        ],
+        [
+          -1.94421e-12,
+          -1.27342e-13,
+          -4.44373e-10
+        ]
+      ],
+      "max_stress_bar": 0.1307696482035445
+    },
+    "zero": {
+      "field_au": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "total_polarization_e_per_bohr2": [
+        4.919259097291295e-10,
+        -2.989140671094681e-10,
+        -5.974075123482692e-10
+      ],
+      "lattice_bohr": [
+        [
+          0.0,
+          5.175252377902025,
+          5.175252377902025
+        ],
+        [
+          5.175252377902025,
+          0.0,
+          5.175252377902025
+        ],
+        [
+          5.175252377902025,
+          5.175252377902025,
+          0.0
+        ]
+      ],
+      "volume_bohr3": 277.220023755464,
+      "conventional_volume_equivalent_lattice_constant_bohr": 10.350504755804048,
+      "enthalpy_Hartree": -7.883397087856179,
+      "minimum_overlap": 0.9089049939640452,
+      "final_electronic_gradient": 8.155e-11,
+      "max_cartesian_force_Hartree_per_bohr": 1.4002853331256792e-09
+    },
+    "cell-zero": {
+      "field_au": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "total_polarization_e_per_bohr2": [
+        4.919259097291295e-10,
+        -2.989140671094681e-10,
+        -5.974075123482692e-10
+      ],
+      "lattice_bohr": [
+        [
+          0.0,
+          5.175252377902025,
+          5.175252377902025
+        ],
+        [
+          5.175252377902025,
+          0.0,
+          5.175252377902025
+        ],
+        [
+          5.175252377902025,
+          5.175252377902025,
+          0.0
+        ]
+      ],
+      "volume_bohr3": 277.220023755464,
+      "conventional_volume_equivalent_lattice_constant_bohr": 10.350504755804048,
+      "enthalpy_Hartree": -7.883397087856181,
+      "minimum_overlap": 0.9089049939640452,
+      "final_electronic_gradient": 8.155e-11,
+      "stress_Hartree_per_bohr3": [
+        [
+          5.68227e-12,
+          -8.4318e-12,
+          1.16631e-11
+        ],
+        [
+          -8.4318e-12,
+          5.92303e-12,
+          1.28171e-11
+        ],
+        [
+          1.16631e-11,
+          1.28171e-11,
+          5.6258e-12
+        ]
+      ],
+      "max_stress_bar": 0.003770921010512693,
+      "max_cartesian_force_Hartree_per_bohr": 1.4002851398983877e-09
+    },
+    "clamped-z-0.0001-minus": {
+      "field_au": [
+        0.0,
+        0.0,
+        -0.0001
+      ],
+      "total_polarization_e_per_bohr2": [
+        -3.7855938571362824e-08,
+        -3.785690870505842e-08,
+        -9.285786249542405e-05
+      ],
+      "lattice_bohr": [
+        [
+          0.0,
+          5.175252377902025,
+          5.175252377902025
+        ],
+        [
+          5.175252377902025,
+          0.0,
+          5.175252377902025
+        ],
+        [
+          5.175252377902025,
+          5.175252377902025,
+          0.0
+        ]
+      ],
+      "volume_bohr3": 277.220023755464,
+      "conventional_volume_equivalent_lattice_constant_bohr": 10.350504755804048,
+      "enthalpy_Hartree": -7.883398374938249,
+      "minimum_overlap": 0.9088977246478062,
+      "final_electronic_gradient": 7.224e-11,
+      "stress_Hartree_per_bohr3": [
+        [
+          -3.96565e-09,
+          4.08884e-11,
+          -1.85983e-12
+        ],
+        [
+          4.08884e-11,
+          -3.96566e-09,
+          -1.87765e-12
+        ],
+        [
+          -1.85983e-12,
+          -1.87765e-12,
+          -1.12561e-08
+        ]
+      ],
+      "max_stress_bar": 3.311658954555393,
+      "max_cartesian_force_Hartree_per_bohr": 1.799729128142691e-08
+    },
+    "relaxed-z-0.0001-minus": {
+      "field_au": [
+        0.0,
+        0.0,
+        -0.0001
+      ],
+      "total_polarization_e_per_bohr2": [
+        -3.7855938571362824e-08,
+        -3.785690870505842e-08,
+        -9.285786249542405e-05
+      ],
+      "lattice_bohr": [
+        [
+          0.0,
+          5.175252377902025,
+          5.175252377902025
+        ],
+        [
+          5.175252377902025,
+          0.0,
+          5.175252377902025
+        ],
+        [
+          5.175252377902025,
+          5.175252377902025,
+          0.0
+        ]
+      ],
+      "volume_bohr3": 277.220023755464,
+      "conventional_volume_equivalent_lattice_constant_bohr": 10.350504755804048,
+      "enthalpy_Hartree": -7.883398374938251,
+      "minimum_overlap": 0.9088977246478069,
+      "final_electronic_gradient": 7.224e-11,
+      "stress_Hartree_per_bohr3": [
+        [
+          -3.96565e-09,
+          4.08884e-11,
+          -1.85983e-12
+        ],
+        [
+          4.08884e-11,
+          -3.96566e-09,
+          -1.87765e-12
+        ],
+        [
+          -1.85983e-12,
+          -1.87765e-12,
+          -1.12561e-08
+        ]
+      ],
+      "max_stress_bar": 3.311658954555393,
+      "max_cartesian_force_Hartree_per_bohr": 1.7997291184813264e-08
+    },
+    "cell-relaxed-z-0.0001-minus": {
+      "field_au": [
+        0.0,
+        0.0,
+        -0.0001
+      ],
+      "total_polarization_e_per_bohr2": [
+        -3.785463903449582e-08,
+        -3.785521356797217e-08,
+        -9.28581435278783e-05
+      ],
+      "lattice_bohr": [
+        [
+          -4.071806629943263e-08,
+          5.1752540798275515,
+          5.17525403505612
+        ],
+        [
+          5.17525407982804,
+          -4.0718643758022044e-08,
+          5.175254035057185
+        ],
+        [
+          5.175263476401349,
+          5.175263476401926,
+          4.05278895305425e-09
+        ]
+      ],
+      "volume_bohr3": 277.22080027006535,
+      "conventional_volume_equivalent_lattice_constant_bohr": 10.350514419981572,
+      "enthalpy_Hartree": -7.883398374941682,
+      "minimum_overlap": 0.9088973034162133,
+      "final_electronic_gradient": 4.391e-11,
+      "stress_Hartree_per_bohr3": [
+        [
+          1.49103e-09,
+          -2.03487e-11,
+          8.14555e-13
+        ],
+        [
+          -2.03487e-11,
+          1.49103e-09,
+          7.90395e-13
+        ],
+        [
+          8.14555e-13,
+          7.90396e-13,
+          4.92089e-10
+        ]
+      ],
+      "max_stress_bar": 0.43867617123255187,
+      "max_cartesian_force_Hartree_per_bohr": 3.726479935750442e-09
+    },
+    "clamped-z-0.0001-plus": {
+      "field_au": [
+        0.0,
+        0.0,
+        0.0001
+      ],
+      "total_polarization_e_per_bohr2": [
+        3.785553825269572e-08,
+        3.7854585563379395e-08,
+        9.285786401908025e-05
+      ],
+      "lattice_bohr": [
+        [
+          0.0,
+          5.175252377902025,
+          5.175252377902025
+        ],
+        [
+          5.175252377902025,
+          0.0,
+          5.175252377902025
+        ],
+        [
+          5.175252377902025,
+          5.175252377902025,
+          0.0
+        ]
+      ],
+      "volume_bohr3": 277.220023755464,
+      "conventional_volume_equivalent_lattice_constant_bohr": 10.350504755804048,
+      "enthalpy_Hartree": -7.883398374938249,
+      "minimum_overlap": 0.9088977198817926,
+      "final_electronic_gradient": 7.56e-11,
+      "stress_Hartree_per_bohr3": [
+        [
+          -3.9649e-09,
+          4.08172e-11,
+          -1.85664e-12
+        ],
+        [
+          4.08172e-11,
+          -3.9649e-09,
+          -1.87955e-12
+        ],
+        [
+          -1.85664e-12,
+          -1.87955e-12,
+          -1.12554e-08
+        ]
+      ],
+      "max_stress_bar": 3.311453007445098,
+      "max_cartesian_force_Hartree_per_bohr": 1.991454686153494e-08
+    },
+    "relaxed-z-0.0001-plus": {
+      "field_au": [
+        0.0,
+        0.0,
+        0.0001
+      ],
+      "total_polarization_e_per_bohr2": [
+        3.785553825269572e-08,
+        3.7854585563379395e-08,
+        9.285786401908025e-05
+      ],
+      "lattice_bohr": [
+        [
+          0.0,
+          5.175252377902025,
+          5.175252377902025
+        ],
+        [
+          5.175252377902025,
+          0.0,
+          5.175252377902025
+        ],
+        [
+          5.175252377902025,
+          5.175252377902025,
+          0.0
+        ]
+      ],
+      "volume_bohr3": 277.220023755464,
+      "conventional_volume_equivalent_lattice_constant_bohr": 10.350504755804048,
+      "enthalpy_Hartree": -7.88339837493825,
+      "minimum_overlap": 0.9088977198817935,
+      "final_electronic_gradient": 7.56e-11,
+      "stress_Hartree_per_bohr3": [
+        [
+          -3.9649e-09,
+          4.08172e-11,
+          -1.85664e-12
+        ],
+        [
+          4.08172e-11,
+          -3.9649e-09,
+          -1.87955e-12
+        ],
+        [
+          -1.85664e-12,
+          -1.87955e-12,
+          -1.12554e-08
+        ]
+      ],
+      "max_stress_bar": 3.311453007445098,
+      "max_cartesian_force_Hartree_per_bohr": 1.991454705476223e-08
+    },
+    "cell-relaxed-z-0.0001-plus": {
+      "field_au": [
+        0.0,
+        0.0,
+        0.0001
+      ],
+      "total_polarization_e_per_bohr2": [
+        3.7854353519828354e-08,
+        3.785379033838243e-08,
+        9.285814192783182e-05
+      ],
+      "lattice_bohr": [
+        [
+          -4.011560444235939e-08,
+          5.175254052167695,
+          5.175254008052785
+        ],
+        [
+          5.175254052167249,
+          -4.011394836212465e-08,
+          5.1752540080506835
+        ],
+        [
+          5.175263337705216,
+          5.17526333770356,
+          4.000962241434301e-09
+        ]
+      ],
+      "volume_bohr3": 277.2207898813626,
+      "conventional_volume_equivalent_lattice_constant_bohr": 10.35051429068822,
+      "enthalpy_Hartree": -7.8833983749417404,
+      "minimum_overlap": 0.9088973046632292,
+      "final_electronic_gradient": 4.777e-11,
+      "stress_Hartree_per_bohr3": [
+        [
+          1.3526e-09,
+          -1.86781e-11,
+          7.4736e-13
+        ],
+        [
+          -1.86781e-11,
+          1.3526e-09,
+          7.21286e-13
+        ],
+        [
+          7.47361e-13,
+          7.21285e-13,
+          2.67588e-10
+        ]
+      ],
+      "max_stress_bar": 0.39794865912097654,
+      "max_cartesian_force_Hartree_per_bohr": 4.0851945356402536e-09
+    }
+  },
+  "sampled_gap_eV": 0.6088681961881053,
+  "reference_conventional_lattice_constant_angstrom": 5.477251234398791,
+  "gpu_mpi_fixed_state_comparison": {
+    "max_polarization_difference_e_per_bohr2": 6.938893903907228e-18,
+    "enthalpy_difference_Hartree": 1.3322676295501878e-14,
+    "mesh": [
+      16,
+      16,
+      16
+    ],
+    "mpi_ranks": 2,
+    "gpus": 2
+  },
+  "berry_regressions_passed": 9
+}

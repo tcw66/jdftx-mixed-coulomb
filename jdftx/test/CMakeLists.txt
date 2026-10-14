@@ -58,6 +58,12 @@ if(EnableCUDA)
 		add_test(NAME berryPhaseGPU COMMAND checkBerryPhase_gpu
 			-i ${CMAKE_CURRENT_BINARY_DIR}/berry-phase.in -o ${CMAKE_CURRENT_BINARY_DIR}/berry-phase-gpu.out)
 		set_tests_properties(berryPhaseGPU PROPERTIES TIMEOUT 180 ENVIRONMENT "OMP_NUM_THREADS=2;OPENBLAS_NUM_THREADS=1")
+		if(EnableMPI)
+			add_test(NAME berryPhaseGPUMPI COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+				${MPIEXEC_PREFLAGS} $<TARGET_FILE:checkBerryPhase_gpu> ${MPIEXEC_POSTFLAGS}
+				-i ${CMAKE_CURRENT_BINARY_DIR}/berry-phase.in -o ${CMAKE_CURRENT_BINARY_DIR}/berry-phase-gpu-mpi.out)
+			set_tests_properties(berryPhaseGPUMPI PROPERTIES TIMEOUT 180 ENVIRONMENT "OMP_NUM_THREADS=2;OPENBLAS_NUM_THREADS=1")
+		endif()
 	endif()
 	add_executable(checkProjectorCache_gpu koopmans/checkProjectorCache.cpp)
 	target_link_libraries(checkProjectorCache_gpu jdftxlib_gpu)

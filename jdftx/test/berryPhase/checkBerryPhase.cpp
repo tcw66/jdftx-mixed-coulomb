@@ -3,6 +3,7 @@
 #include <electronic/BerryPhase.h>
 #include <electronic/ElecMinimizer.h>
 #include <electronic/SpeciesInfo.h>
+#include <core/Coulomb.h>
 #include <commands/parser.h>
 #include <cmath>
 
@@ -97,6 +98,43 @@ void check(Everything& e)
 		fullEnergy[sign] = e.eVars.elecEnergyAndGrad(e.ener,0,0,true);
 	}
 	close(-(fullEnergy[1]-fullEnergy[0])/(2*h),force[0],2e-6,"Finite-field ionic force");
+	e.iInfo.species[0]->atpos[0] = position; e.iInfo.species[0]->sync_atpos();
+	// Differentiate all six symmetric strains at fixed normalized reduced
+	// coefficients. This checks the field term and the complete DFT stress.
+	const matrix3<> lattice = e.gInfo.R;
+	const double volume = e.gInfo.detR;
+	e.iInfo.computeStress = true;
+	auto strainEnergy = [&](const matrix3<>& strain)
+	{	e.gInfo.R = (matrix3<>(1,1,1)+strain)*lattice;
+		e.gInfo.update(); e.updateSupercell();
+		e.coulombParams.recreateCoulomb(e.gInfo,e.gInfoWfns,e.coulomb,e.coulombWfns);
+		e.iInfo.update(e.ener);
+		e.eVars.C = original;
+		for(int q=e.eInfo.qStart; q<e.eInfo.qStop; q++)
+		{	e.eVars.C[q] *= sqrt(volume/e.gInfo.detR);
+			e.iInfo.project(e.eVars.C[q],e.eVars.VdagC[q]);
+		}
+		return e.eVars.elecEnergyAndGrad(e.ener,0,0,true);
+	};
+	for(vector3<int> branch: {vector3<int>(),vector3<int>(-1,2,-3)})
+	{	e.berryPhase->polarizationBranch = branch;
+		strainEnergy(matrix3<>());
+		e.iInfo.ionicEnergyAndGrad();
+		matrix3<> fullStrainGradient = volume*e.iInfo.stress;
+		matrix3<> berryStrainGradient = e.berryPhase->latticeGradient(e);
+		for(int a=0; a<3; a++) for(int b=a; b<3; b++)
+		{	matrix3<> direction;
+			direction(a,b) = direction(b,a) = a==b ? 1. : 0.5;
+			for(int sign=0; sign<2; sign++)
+			{	fullEnergy[sign] = strainEnergy((sign ? h : -h)*direction);
+				energy[sign] = e.berryPhase->evaluate(e);
+			}
+			close((energy[1]-energy[0])/(2*h),berryStrainGradient(a,b),1e-8,"Fixed-Cartesian-field Berry stress / branch");
+			close((fullEnergy[1]-fullEnergy[0])/(2*h),fullStrainGradient(a,b),1e-5,"Complete electric-enthalpy strain derivative");
+		}
+	}
+	e.berryPhase->polarizationBranch = vector3<int>();
+	strainEnergy(matrix3<>());
 	logPrintf("Berry-phase variational regressions passed.\n");
 }
 }

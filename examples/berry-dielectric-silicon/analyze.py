@@ -22,6 +22,7 @@ def read(path):
 
 def aligned_change(data, zero, lattice, mesh):
     """Align individual string phases before averaging a weak-field response."""
+    lattice = data.get('lattice', np.asarray(lattice)).reshape(3, 3)
     volume = np.linalg.det(lattice)
     if 'berry_phases' in data and 'berry_phases' in zero:
         np.testing.assert_array_equal(data['berry_phase_directions'], zero['berry_phase_directions'])
@@ -30,9 +31,12 @@ def aligned_change(data, zero, lattice, mesh):
         if np.max(np.abs(phase)) >= np.pi/2:
             raise ValueError('field changes string phases too far for a zero-field derivative; reduce field')
         directions = data['berry_phase_directions'].astype(int)
-        reduced = np.array([phase[directions == d].sum()/(np.prod(mesh)/mesh[d]) for d in range(3)])
-        delta = data['spin_weight'][0] * (lattice @ reduced)/(2*np.pi*volume)
-        delta += data['ionic']-zero['ionic']
+        branch = data['berry_phases']-zero['berry_phases']-phase
+        reduced = np.array([branch[directions == d].sum()/(np.prod(mesh)/mesh[d]) for d in range(3)])
+        shift = data['spin_weight'][0] * (lattice @ reduced)/(2*np.pi*volume)
+        # Use the actual strained-cell polarization, including the geometric
+        # change of the reference electronic and ionic dipoles and branch offset.
+        delta = data['total']-shift-zero['total']
     else:
         # Compatibility with previously generated polarization files.
         delta = data['total']-zero['total']
@@ -47,13 +51,14 @@ def aligned_change(data, zero, lattice, mesh):
 
 def analyze(directory):
     metadata = json.loads((directory / 'workflow.json').read_text())
-    lattice = np.array(metadata['lattice'])
-    volume = np.linalg.det(lattice)
-    zero = read(directory / 'zero.polarization')
     results = []
     for h in metadata['fields']:
         tensors = {}
-        for mode in ['clamped', 'relaxed'] if metadata['relaxed'] else ['clamped']:
+        for mode in metadata.get('modes', ['clamped', 'relaxed'] if metadata['relaxed'] else ['clamped']):
+            reference = 'cell-zero' if mode == 'cell-relaxed' else 'zero'
+            zero = read(directory / f'{reference}.polarization')
+            lattice = zero.get('lattice', np.array(metadata['lattice'])).reshape(3, 3)
+            volume = np.linalg.det(lattice)
             tensor = np.full((3, 3), np.nan)
             curvature = {}
             for axis in metadata['axes']:
@@ -68,6 +73,8 @@ def analyze(directory):
                         raise ValueError(f'{job["name"]}: unconverged electrons')
                     if mode == 'relaxed' and not minimized(output, 'IonicMinimize:'):
                         raise ValueError(f'{job["name"]}: unconverged ions')
+                    if mode == 'cell-relaxed' and not minimized(output, 'LatticeMinimize:'):
+                        raise ValueError(f'{job["name"]}: unconverged lattice and ions')
                     expected = np.eye(3)[beta] * sign * h
                     np.testing.assert_allclose(data['field'], expected, atol=1e-15)
                     delta, enthalpy = aligned_change(data, zero, lattice, np.array(metadata['mesh']))
@@ -81,9 +88,13 @@ def analyze(directory):
                 print(f'Max tensor asymmetry: {np.max(np.abs(tensor-tensor.T)):.3e}')
             # Use None for uncomputed tensor columns in strict JSON.
             values = [[float(v) if np.isfinite(v) else None for v in row] for row in tensor]
-            results.append(dict(amplitude=h, mode=mode, dielectric=values, curvature=curvature))
+            results.append(dict(amplitude=h, mode=mode, dielectric=values, curvature=curvature,
+                                reference=reference, reference_volume=float(volume),
+                                reference_lattice=lattice.tolist()))
         if metadata['relaxed']:
             print(f'Lattice contribution:\n{tensors["relaxed"]-tensors["clamped"]}')
+        if metadata.get('cell_relaxed'):
+            print(f'Cell-relaxed minus fixed-cell response (reference geometries may differ):\n{tensors["cell-relaxed"]-tensors["relaxed"]}')
     (directory / 'dielectric.json').write_text(json.dumps(results, indent=2, allow_nan=False) + '\n')
 
 

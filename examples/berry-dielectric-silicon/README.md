@@ -69,8 +69,27 @@ The DFT forces evaluated with field-polarized states plus the explicit ionic
 ionic response includes the electronic polarization change as ions move.
 No Born-charge approximation is added to the finite-field relaxation.
 
-Ultrasoft/PAW overlaps and their force augmentation, fluid, stress, and
-lattice relaxation are not supported by this command and are rejected.
+`lattice-minimize` relaxes cell shape, volume and internal positions together
+at fixed **Cartesian E**, using the symmetric strain derivative of the same
+electric enthalpy. The field contribution is
+`sigma_field = -(E outer P_total + P_total outer E)/2`.
+This is the fixed-field stress of PRL Eq. (6), symmetrized because JDFTx's
+lattice optimizer varies symmetric strain. It differs from the fixed-voltage
+stress, for which the explicit Berry contribution vanishes. The usual DFT
+stress is evaluated on the polarized electronic state. No vacuum-field
+`E^2/(8*pi)` energy is added to the prescribed electric-enthalpy functional.
+
+At fixed Cartesian field, the strain derivative depends on the absolute
+polarization branch, which represents a choice of surface-charge boundary
+condition. `berry-phase-branch n1 n2 n3` adds `sum_i n_i a_i / Omega` to the
+total polarization. This offset follows the lattice during relaxation.
+The default is `0 0 0`; the supplied diamond-silicon geometry requires
+`berry-phase-branch -1 -1 -1` to select its zero-polarization branch.
+Use the same offset for the reference and both field signs. The workflow
+selects this branch automatically when `--relax-cell` is requested.
+
+Ultrasoft/PAW overlaps and their force augmentation, fluid, ionic dynamics,
+and vibrations are not supported by this command and are rejected.
 Filled occupations alone do not establish that a crystal is insulating:
 verify the zero-field gap independently. Keep fields weak enough to follow
 the local insulating branch. Singular initial/final overlaps are rejected;
@@ -115,6 +134,41 @@ For an inexpensive initial calculation:
 python3 run.py --work smoke --mesh 4 --cutoff 12 --axes z --relax-ions --run
 ```
 
+To relax both the cell and ions and compute the z response on a 16³ mesh:
+
+```bash
+JDFTX_CACHE_SIZE=4096 python3 run.py --work results-cell-k16 --mesh 16 \
+  --fields 0.0001 --axes z --relax-cell --lattice-threshold 1e-6 \
+  --electronic-threshold 1e-10 --gpu --threads 4 --run --resume
+```
+
+This prepares clamped-ion, fixed-cell relaxed-ion and cell-relaxed calculations.
+Both clamped field signs start from the same zero-field wavefunctions;
+structural relaxation reuses the converged clamped state at its own field.
+It equilibrates the zero-field cell, regenerates the cutoff basis there, and
+then runs `cell-zero` and both cell-relaxed field signs with the same initial
+G-vector lists. This avoids contaminating enthalpy curvature with a cutoff
+basis reset. Each cell minimization includes the ions and targets zero
+external stress at fixed Cartesian field. `--lattice-threshold` sets the
+maximum component of the preconditioned joint gradient; the silicon inputs
+use `latt-move-scale 8 8 8` to balance cell and ionic steps. Inspect final
+stresses and converge the cutoff as well as the gradient thresholds.
+Regenerating the basis can slightly change its equilibrium geometry, so
+`cell-zero` can differ from the fixed-cell `zero` reference. The JSON records
+both reference lattices. Their response difference includes that geometry
+change and should not be interpreted as a pure linear strain contribution.
+Remove `--gpu` for CPU/MPI; `--ranks N` selects MPI parallelism.
+For a full tensor omit `--axes z`.
+
+`--lattice-constant` changes the initial conventional lattice constant in
+bohr. For a single mesh, `--initial-wavefunction` can reuse an occupied seed;
+`--initial-cutoff` specifies the cutoff defining that seed's G-vector lists
+in the new initial cell, using JDFTx's normal wavefunction conversion. An
+isotropically strained seed with original constant `a_old` and original
+cutoff `Ecut_old` uses `Ecut_old*(a_old/a_new)^2`. This scalar conversion is
+not sufficient for a general change of cell shape; use a compatible seed or
+fresh initialization in that case.
+
 `--axes z` computes the z column, without assuming cubic symmetry. Omit it
 for the complete tensor. The default electronic gradient threshold is
 `1e-9`; `--electronic-threshold` and `--force-threshold` allow explicit
@@ -130,6 +184,11 @@ polarization quantum, which cannot always be corrected by rounding the total
 polarization alone. Older files without individual phases remain readable.
 It reports the central-difference tensor and its diagonal independently
 from enthalpy curvature, with the same branch correction applied to both.
+Cell-relaxed runs use their own `cell-zero` reference, final lattice matrices
+and actual volumes. Curvature differentiates the dipole divided by the
+reference volume; it agrees with the polarization slope in the weak-field
+limit for this nonpolar reference. For a polar crystal, volume response and
+the electrical boundary condition must also be considered.
 When ion relaxation is enabled it also reports `epsilon_static - epsilon_electronic`.
 Uncomputed tensor columns are `null` in JSON.
 
@@ -137,6 +196,7 @@ The `.polarization` output contains Cartesian electronic, ionic and total
 polarization in electrons/bohr squared, the applied field, the field coupling,
 internal DFT energy, electric enthalpy, minimum overlap singular value, occupied
 spin weight, and individual unwrapped string phases and lattice directions.
+It also records the actual lattice matrix and the polarization branch offset.
 The `EfieldBerry` energy component is included in JDFTx's minimized energy.
 Ordinary dumped subspace eigenvalues are DFT Hamiltonian eigenvalues in the
 occupied field-polarized subspace, not independently diagonalized finite-field
@@ -150,6 +210,8 @@ Measured results, convergence plots, and backend comparisons are in the
 [validation report](VALIDATION.md).
 The equation-by-equation PRL audit and independent Quantum ESPRESSO comparison
 are in [PRL_AUDIT.md](PRL_AUDIT.md).
+The completed [16³ cell-relaxed calculation](VALIDATION_CELL_16.md) gives
+`epsilon_zz = 12.668898` at a zero-field lattice constant of 5.477251 Å.
 
 ## Verification
 
@@ -164,6 +226,9 @@ factors, shifted meshes, a common plane-wave basis, and MPI distribution.
 The silicon workflow regression checks symmetric field amplitudes,
 polarization/enthalpy consistency, relaxed-ion response, input guards,
 and citation output in Berry runs and its absence in ordinary calculations.
+It also checks full cell relaxation, final stresses and the nonpolar branch.
+Numerical regressions compare all six strain derivatives against both the
+Berry field coupling and complete electric enthalpy, with different branches.
 
 The implementation follows the supplied Berry-phase workflow and the
 occupied-state electric-enthalpy method of

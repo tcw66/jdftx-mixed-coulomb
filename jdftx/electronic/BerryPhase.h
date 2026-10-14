@@ -11,10 +11,12 @@ class BerryPhase
 {
 public:
 	vector3<> field;
+	vector3<int> polarizationBranch; //!< total-polarization offset in primitive e R / volume quanta
 	bool ready = false;
 	void setup(const Everything& e);
 	double evaluate(const Everything& e, std::vector<ColumnBundle>* gradient=0);
 	void acceptPhase(); //!< advance the phase branch only at an accepted electronic iterate
+	matrix3<> latticeGradient(const Everything& e) const; //!< symmetric strain derivative at fixed Cartesian field
 	void dump(const Everything& e);
 
 private:

@@ -1,5 +1,9 @@
 # Silicon finite-field validation
 
+For the completed 16³ calculation with unit-cell and ionic relaxation, see
+[the separate cell-relaxation report](VALIDATION_CELL_16.md). It uses a
+relaxed zero-field geometry rather than the fixed geometry below.
+
 Validated October 14, 2026 with the modified CPU and CUDA JDFTx executables.
 Settings: PBE, SG15 norm-conserving Si pseudopotential, 30-Hartree plane-wave
 cutoff, conventional lattice constant 10.26 bohr, two-atom primitive diamond
