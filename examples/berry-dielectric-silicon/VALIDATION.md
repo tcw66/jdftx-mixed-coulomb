@@ -39,6 +39,16 @@ limiting PBE value; the implementation does not fit to the experimental number.
 
 ![Silicon dielectric mesh convergence](validation-convergence.png)
 
+The plot also includes the completed 16³ response with cell and ions relaxed:
+**12.668898** from Berry polarization and **12.655843** from occupied Wannier
+centers. These points are shown separately from the fixed-geometry curve:
+their zero-field lattice constant is 10.350505 bohr, compared with 10.26 bohr
+for the 4³–12³ series. The difference from the 12³ result therefore includes
+both mesh and geometry changes. See the [cell-relaxation](VALIDATION_CELL_16.md)
+and [Wannier](VALIDATION_WANNIER_16.md) reports for their numerical records.
+Regenerate the PNG and PDF from the committed data with
+`python3 plot_convergence.py` in this directory.
+
 The full Cartesian clamped-ion tensor was also calculated at 8³ and `h=1e-4`:
 
 ```
