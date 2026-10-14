@@ -1,0 +1,152 @@
+{
+  "model": "epsilon(N) = epsilon_infinity + A/N",
+  "amplitude_au": 0.0001,
+  "primary": {
+    "electronic": {
+      "mesh": [
+        6,
+        8,
+        12,
+        16
+      ],
+      "powers": [
+        1
+      ],
+      "coefficients": [
+        13.733279257981891,
+        -17.289760526506115
+      ],
+      "epsilon_infinity": 13.733279257981891,
+      "residual_rms": 0.014709702126619971
+    },
+    "enthalpy_curvature": {
+      "mesh": [
+        6,
+        8,
+        12,
+        16
+      ],
+      "powers": [
+        1
+      ],
+      "coefficients": [
+        13.733182724950453,
+        -17.289128498287074
+      ],
+      "epsilon_infinity": 13.733182724950453,
+      "residual_rms": 0.014615805323309746
+    },
+    "static": {
+      "mesh": [
+        6,
+        8,
+        12,
+        16
+      ],
+      "powers": [
+        1
+      ],
+      "coefficients": [
+        13.73327840782088,
+        -17.28975008731972
+      ],
+      "epsilon_infinity": 13.73327840782088,
+      "residual_rms": 0.014709715631015733
+    }
+  },
+  "sensitivity": [
+    {
+      "label": "linear 1/N, all meshes",
+      "mesh": [
+        4,
+        6,
+        8,
+        12,
+        16
+      ],
+      "powers": [
+        1
+      ],
+      "coefficients": [
+        13.689067023155465,
+        -16.83858509104894
+      ],
+      "epsilon_infinity": 13.689067023155465,
+      "residual_rms": 0.02322038515676
+    },
+    {
+      "label": "linear 1/N, N >= 8",
+      "mesh": [
+        8,
+        12,
+        16
+      ],
+      "powers": [
+        1
+      ],
+      "coefficients": [
+        13.735370992784686,
+        -17.3154450840846
+      ],
+      "epsilon_infinity": 13.735370992784686,
+      "residual_rms": 0.016966110862810562
+    },
+    {
+      "label": "linear 1/N, same geometry N=4..12",
+      "mesh": [
+        4,
+        6,
+        8,
+        12
+      ],
+      "powers": [
+        1
+      ],
+      "coefficients": [
+        13.649957568100007,
+        -16.63981703712002
+      ],
+      "epsilon_infinity": 13.649957568100007,
+      "residual_rms": 0.014133987256969953
+    },
+    {
+      "label": "quadratic 1/N, N >= 6",
+      "mesh": [
+        6,
+        8,
+        12,
+        16
+      ],
+      "powers": [
+        1,
+        2
+      ],
+      "coefficients": [
+        13.78670057706614,
+        -18.350319302424857,
+        4.613720456494187
+      ],
+      "epsilon_infinity": 13.78670057706614,
+      "residual_rms": 0.013759565654343883
+    },
+    {
+      "label": "linear 1/N^2, N >= 6",
+      "mesh": [
+        6,
+        8,
+        12,
+        16
+      ],
+      "powers": [
+        2
+      ],
+      "coefficients": [
+        12.846344240573394,
+        -74.03266242132389
+      ],
+      "epsilon_infinity": 12.846344240573394,
+      "residual_rms": 0.09037394016716316
+    }
+  ],
+  "caveat": "Empirical fit: reference geometry differs at N=16; field and asymptotic mesh convergence are not established."
+}

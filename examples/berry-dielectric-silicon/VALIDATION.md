@@ -32,7 +32,7 @@ The relaxed-ion correction is below `1.2e-6`, consistent with the absence of
 a linear lattice dielectric contribution in ideal diamond silicon. At 12³
 the polarization slope and enthalpy-curvature values differ by `1.1e-4`.
 
-The largest-mesh result is close to the experimental reference near 12 supplied
+The fixed-geometry 12³ result is close to the experimental reference near 12 supplied
 in the request. **It is not an extrapolated or fully k-mesh-converged value:**
 the change from 8³ to 12³ is still 0.69. Finer meshes are needed for a precise
 limiting PBE value; the implementation does not fit to the experimental number.
@@ -41,15 +41,57 @@ limiting PBE value; the implementation does not fit to the experimental number.
 
 The plot uses inverse mesh size **1/N**, with zero marking the infinite-mesh
 limit, and includes the 16³ result with **fixed cell and relaxed ions**:
-**12.668863** from Berry polarization and **12.655829** from occupied Wannier
-centers. The 16³ Berry result is included with the same markers and connecting curve
+**12.668863** from Berry polarization. The corresponding occupied-Wannier
+estimate is **12.655829**. The 16³ Berry result uses the same markers and connecting curve
 as the other meshes; its Wannier comparison remains in the numerical report.
 The 16³ fixed reference lattice constant is 10.350505 bohr, compared with
 10.26 bohr for the 4³–12³ series. The difference from 12³ includes both mesh and geometry changes;
-no extrapolation is fitted. See the [Wannier comparison](VALIDATION_WANNIER_16.md)
+the extrapolation below is therefore empirical. See the [Wannier comparison](VALIDATION_WANNIER_16.md)
 for the numerical records and the alternative cell-relaxed response.
 Regenerate the PNG and PDF from the committed data with
 `python3 plot_convergence.py` in this directory.
+
+## Infinite-mesh extrapolation
+
+An unweighted least-squares fit of the fixed-cell, relaxed-ion Berry results
+at **N = 6, 8, 12 and 16** gives
+
+```
+epsilon_zz(N) = 13.7332784 - 17.2897501/N
+epsilon_zz(infinity) ≈ 13.73
+```
+
+The dashed fit and its intercept at `1/N = 0` are included in the figure.
+N = 4 is excluded from the primary fit to emphasize the finer meshes.
+Electronic polarization and electronic enthalpy curvature independently give
+intercepts 13.733279 and 13.733183. The static fit's residual RMS is 0.01471;
+this is a fit diagnostic, not an uncertainty on the physical limiting value.
+
+| Static extrapolation | εzz at infinity | Residual RMS |
+| --- | ---: | ---: |
+| Linear in 1/N, N ≥ 6 (primary) | 13.7333 | 0.0147 |
+| Linear in 1/N, N ≥ 8 | 13.7354 | 0.0170 |
+| Linear in 1/N, all five meshes | 13.6891 | 0.0232 |
+| Linear in 1/N, same geometry N = 4–12 | 13.6500 | 0.0141 |
+| Quadratic in 1/N, N ≥ 6 | 13.7867 | 0.0138 |
+| Linear in 1/N², N ≥ 6 | 12.8463 | 0.0904 |
+
+These fits support a provisional **linear-extrapolation estimate near 13.7**,
+but do not establish the asymptotic scaling. The pure 1/N² fit describes the
+available data less well; its different intercept illustrates model
+sensitivity and is not a statistical confidence bound. The 16³ reference
+geometry differs from the others, and the field amplitude and plane-wave
+cutoff also require convergence for a precise dielectric limit.
+
+The infinite-mesh dielectric limit should be approached with fields tending
+to zero: the finite-field enthalpy's critical field decreases as the mesh is
+refined, as described by [Souza, Íñiguez and Vanderbilt,
+PRL 89, 117602 (2002)](https://journals.aps.org/prl/abstract/10.1103/PhysRevLett.89.117602).
+Extrapolating these weak-field finite differences is an estimate of the
+linear response, rather than evidence of a stable enthalpy minimum at
+fixed nonzero field and arbitrarily large N. No Wannier extrapolation is
+available from its single mesh size. Full coefficients, selected meshes and
+fit diagnostics are saved in [validation-extrapolation.json](validation-extrapolation.json).
 
 The full Cartesian clamped-ion tensor was also calculated at 8³ and `h=1e-4`:
 
