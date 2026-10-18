@@ -21,6 +21,7 @@ parser.add_argument('--launcher')
 parser.add_argument('--rank-flag', default='-n')
 parser.add_argument('--ranks', type=int, default=3)
 parser.add_argument('--nested', action='store_true')
+parser.add_argument('--ibz-storage', action='store_true')
 parser.add_argument('--reuse-reference', action='store_true',
                     help='reuse a completed explicit reference and SCF in DFPT_SYMMETRY_TEST_DIR')
 args = parser.parse_args()
@@ -43,8 +44,9 @@ elif args.species == 'BN':
 else:
     geometry = 'lattice face-centered Cubic 10.26\nion Si 0 0 0 1\nion Si 0.25 0.25 0.25 1\n'
     # Non-self-inverse q points plus nonsymmorphic atom translations.
-    settings = 'kpoint-folding 4 2 2\nelec-n-bands 4\n'
-    grid, nm, bands = '4 2 2', 6, 4
+    # IBZ density symmetrization must preserve the electronic integration mesh.
+    settings = f'kpoint-folding {"2 2 2" if args.ibz_storage else "4 2 2"}\nelec-n-bands 4\n'
+    grid, nm, bands = ('2 2 2' if args.ibz_storage else '4 2 2'), 6, 4
 common = f'''coords-type lattice
 ion-species {pseudo}
 {geometry}{settings}symmetries none
@@ -130,8 +132,12 @@ with (nullcontext(os.environ['DFPT_SYMMETRY_TEST_DIR']) if 'DFPT_SYMMETRY_TEST_D
             timings.update(json.loads((directory/'timings.json').read_text()))
     else:
         run(directory, common+'dump-name scf.$VAR\ndump End State Fillings\n')
+    if args.ibz_storage:
+        source = common.replace('symmetries none','symmetries automatic')+'dump-name ibz-scf.$VAR\ndump End State Fillings\n'
+        (directory/'ibz-source.in').write_text(source)
+        run(directory,source,log_name='ibz-scf.out')
     variants = [('explicit', 'no', 'no', ())]
-    if args.species != 'BN' and not args.reuse_reference:
+    if args.species != 'BN' and not args.reuse_reference and not args.ibz_storage:
         variants.append(('q-only', 'yes', 'no', ()))
     variants.append(('reference', 'yes', 'yes', ()))
     variants.append(('reduced', 'yes', 'yes', ()))
@@ -140,13 +146,19 @@ with (nullcontext(os.environ['DFPT_SYMMETRY_TEST_DIR']) if 'DFPT_SYMMETRY_TEST_D
     if args.launcher:
         variants.append(('mpi', 'yes', 'yes', (args.launcher, args.rank_flag, str(args.ranks))))
         variants.append(('optimized-mpi', 'yes', 'yes', (args.launcher, args.rank_flag, str(args.ranks))))
+    if args.ibz_storage:
+        variants = [variants[0], ('ibz', 'yes', 'yes',
+                    (args.launcher,args.rank_flag,str(args.ranks)) if args.launcher else ())]
     reference = None
     for prefix, qsym, dsym, launch in variants:
         if prefix == 'explicit' and args.reuse_reference:
             log = (directory/'explicit.out').read_text()
             assert 'Done!' in log
         else:
-            log = run(directory, common+f'''initial-state scf.$VAR
+            initial = ('phonon-dfpt-initial-state ibz-source.in ibz-scf.$VAR\n'
+                       'phonon-dfpt-k-batch-size 1\nphonon-dfpt-ibz-storage yes\n' if prefix == 'ibz'
+                       else 'initial-state scf.$VAR\n')
+            log = run(directory, common+initial+f'''
 perturb-minimize nIterations 500 residualTol 1e-7 residualDiffThreshold 0
 phonon-dfpt {grid}
 phonon-dfpt-electron-phonon yes
@@ -166,7 +178,7 @@ dump End None
         if launch:
             assert int(re.search(r'DFPT q groups completed: (\d+) response solves', log)[1]) == solves
         else:
-            assert len(re.findall('DFPT final relative residual:', log)) == solves
+            assert len(re.findall(r'DFPT final relative residual(?: bound)?:', log)) == solves
         if prefix == 'explicit':
             assert representatives == nq and solves == nq*nm
         else:

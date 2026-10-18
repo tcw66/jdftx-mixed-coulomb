@@ -113,6 +113,25 @@ history length, and outer iteration limit (shown here with their defaults).
 The default remains `phonon-dfpt-solver coupled`: nested iteration is not faster
 for every material or mesh, so compare timings for the intended calculation.
 
+To limit response memory, set `phonon-dfpt-k-batch-size 1` (or another positive
+number of local k points per MPI rank). This selects fixed-potential k streaming:
+every outer iteration uses the same potential for all batches, sums their induced
+densities, then mixes the updated screening potential. Additional sweeps verify a
+bound on the original coupled residual and contract the final forces. At metallic
+Gamma, the fixed-electron-number projection is accumulated over the entire mesh.
+All bands and k integration points are retained. This trades repeated offset-state
+setup and response solves for less memory; it requires uniform full-mesh weights
+and does not use the per-displacement k symmetry reduction. Ground-state
+wavefunctions remain on the full mesh. Zero restores the ordinary solver.
+This control can be combined with q checkpoint batches and changed when resuming
+the same checkpoints. Q batches alone limit the work per job, while k streaming
+limits the workspace within a response calculation.
+
+GPU nonlocal projectors may also retain significant memory across k points.
+`JDFTX_PROJECTOR_CACHE_MIB=256` bounds their retained cache per species and MPI
+rank; the default remains unlimited. This cache limit changes recomputation,
+not the pseudopotential or the response equations.
+
 The ground-state SCF can use a symmetry-reduced k mesh. Save its `State` and
 `Fillings`, then replace `initial-state` in the DFPT input with:
 \code
@@ -126,6 +145,34 @@ Wavefunctions are transformed onto the full mesh with reciprocal-index remapping
 space-group translation phases and time reversal, and distributed across MPI ranks.
 The full ground state is polished before response calculations. Use ordinary
 `initial-state` to read an existing full-mesh checkpoint.
+
+To avoid the full ground-state expansion entirely, combine the reduced restart
+with `phonon-dfpt-ibz-storage yes`, `phonon-dfpt-k-batch-size 1`, and
+`dump End None`. The ground state is prepared on its original IBZ and its
+representative wavefunctions then stay on the host. Each active GPU batch
+reconstructs source and on-mesh offset states directly from those representatives,
+including reciprocal-index remapping, translation phases, and time reversal.
+No ground-state wavefunction array on the full mesh is allocated. All electronic
+points and bands still contribute to each screening iteration. Explicit force
+derivatives and final native electron-phonon export also run in k batches; the
+matching full-mesh electronic checkpoint is written one state at a time.
+Q groups synchronize the representative band gauge before export. Generic dumps
+which require a complete electronic state are disabled in this mode; phonon
+outputs and their matching electronic files are written by the driver.
+
+IBZ storage also accepts a saved fixed-density NSCF input as the first argument
+of `phonon-dfpt-initial-state`. That input must use `fix-electron-density` with
+the original converged density, and the state pattern must provide wavefunctions,
+fillings, and eigenvalues. The original density and potential stay fixed while
+source-band residuals are checked and refined. No replacement SCF mesh is created.
+The target geometry must match the actual symmetry-adjusted checkpoint geometry;
+the loader checks it after source symmetry setup and rejects a mismatch. Source
+and target FFT grids, functionals, pseudopotentials, smearing, band count and
+weighted electronic meshes must agree. Native electron-phonon export still
+requires a phonon q grid contained in the original electronic mesh.
+The full electronic mesh must preserve every spatial symmetry used by the source
+IBZ calculation. An anisotropic electronic mesh breaking those crystal symmetries
+is rejected; use a compatible mesh or explicitly restrict the source symmetry group.
 
 MPI ranks normally divide the electronic k points, with q and displacement
 directions solved sequentially. Set `phonon-dfpt-q-groups 2` to split ranks into
@@ -167,8 +214,76 @@ Off-mesh offset states are minimized at fixed potential. If the nonlinear
 minimizer leaves a large residual, a restarted block Davidson fallback expands
 the trial subspace with independent vectors. Both paths must pass the offset
 residual check; increasing `electronic-minimize nIterations` increases the
-fallback iteration limit as well. A failed grid calculation does not currently
-save completed q matrices for restart.
+fallback iteration limit as well.
+
+\subsection DFPTQBatches Completed-q checkpoints and separate GPU jobs
+
+Add `phonon-dfpt-checkpoint responses` to save each completed symmetry-independent
+q response in a directory. An ordinary calculation with this command reuses
+completed responses and solves only those still missing. Checkpoints are published
+by atomic rename after all displacement responses at a representative pass their
+convergence and Hermiticity checks. An interrupted q must be recomputed; completed
+q points survive. The parent directory must already exist.
+
+For separate jobs, keep a common DFPT input (including the checkpoint directory)
+and add one batch command to each job:
+\code
+# Job 1:
+phonon-dfpt-q-batch 1 4
+# Job 2 uses 2 4, job 3 uses 3 4, job 4 uses 4 4.
+\endcode
+The command takes a 1-based batch index and batch count. Representative ordinal r,
+starting at zero in the logged representative list, belongs to batch `1 + r % count`.
+Every symmetry orbit stays in one batch. Batches can run sequentially or concurrently
+with disjoint GPU allocations, sharing the checkpoint directory. Use separate logs
+and `dump End None` for these jobs. Do not run two writers for the same batch.
+MPI q groups remain available within each batch, with electronic k points distributed
+across ranks in each group. Idle batches are allowed when there are more batches
+than representatives. Batch jobs write checkpoints only, without native phonon or
+electron-phonon outputs. Rerunning a batch reuses its completed q responses.
+
+After all batch jobs finish, remove the batch command and add:
+\code
+phonon-dfpt-merge yes
+\endcode
+This run checks for all required representatives and reconstructs symmetry partners,
+reciprocal reality, the acoustic sum rule and the real-space interpolation files.
+It does not solve perturbation responses. With `phonon-dfpt-electron-phonon yes`,
+checkpoints contain the screened induced potentials for the independent displacement
+directions. Merge contracts these potentials against a single common set of
+ground-state eigenvectors and writes the native `phononHsub` and matching electronic
+states. This avoids mixing incompatible band gauges from independent jobs. Merge
+still initializes/polishes the ground state and performs the electron-phonon export;
+it is not a lightweight file concatenation. Run only one merge for a given output
+prefix after the batches finish.
+
+CPU and CUDA executables support the same checkpoint format on the same architecture.
+All response solving and final band contractions retain their existing GPU paths.
+Completed displacement potentials are kept in host memory while subsequent responses
+run, reducing retained GPU memory. Response wavefunction arrays are allocated only
+when a missing q needs solving; initialization and merge avoid the unused
+lattice-periodic response workspace. Completed checkpointed responses release
+their wavefunction workspaces before the next q or export. Checkpoints add disk storage of approximately
+`16 * Nfft * Nindependent_displacements` bytes per representative with electron-phonon
+export, plus the force matrix, density reference and metadata. The final native
+electron-phonon output has the same size as an unsplit calculation.
+
+Use the same converged SCF state and identical physical/numerical inputs for all
+jobs. Checkpoints validate parsed inputs (including response tolerances), realized
+geometry, k/FFT meshes, pseudopotential contents, symmetry plans and the ground-state
+density (relative L2 difference at most 1e-6). Input signatures conservatively retain
+command order. Execution/output controls, checkpoint path and initial-state paths
+may change; MPI rank/group counts and CPU/GPU choice may also change. Checksums
+reject truncated or corrupt files. Use a fresh directory when changing the system
+or numerical settings; partial `.tmp-*` files from interrupted writes are ignored.
+Phonon cache budgets, cache/optimization switches, offset-state reuse and export
+reciprocity may also change without invalidating completed responses.
+
+Q batching limits work per job and enables restart. Each q still needs the entire
+electronic integration mesh for self-consistent screening, so it does not remove
+the memory requirement of one q response. Distributing k states across more GPU
+ranks in one q group and lowering response/export cache budgets remain useful
+when that single-response memory is the limiting factor.
 
 The force matrix contains the self-consistent electronic response, explicit
 second local and nonlocal pseudopotential derivatives, and an analytic finite-q

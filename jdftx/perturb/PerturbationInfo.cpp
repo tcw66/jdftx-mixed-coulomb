@@ -82,6 +82,12 @@ void PerturbationInfo::setup(const Everything &e, const ElecVars &eVars)
 		return;
 
 	if(phononGrid.isNonzero()) {
+		if(phononIBZStorage) {
+			if(phononInitialInput.empty() || phononKBatchSize<=0)
+				die("phonon-dfpt-ibz-storage requires phonon-dfpt-initial-state and positive phonon-dfpt-k-batch-size.\n");
+			for(const auto& dump:e.dump) if(dump.second!=DumpNone)
+				die("phonon-dfpt-ibz-storage requires dump End None; native phonon/electron-phonon outputs are streamed automatically.\n");
+		}
 		Citations::add("Phonons from density-functional perturbation theory",
 			"S. Baroni, S. de Gironcoli, A. Dal Corso and P. Giannozzi, Rev. Mod. Phys. 73, 515 (2001)");
 		if(e.eInfo.fillingsUpdate==ElecInfo::FillingsHsub)
@@ -102,6 +108,14 @@ void PerturbationInfo::setup(const Everything &e, const ElecVars &eVars)
 		if(e.iInfo.vdWenable || e.iInfo.nChargeball || e.cntrl.fixed_H || e.cntrl.dumpOnly || e.ionicDynParams.nSteps || e.ionicMinParams.nIterations || e.latticeMinParams.nIterations || e.vibrations)
 			die("phonon-dfpt does not support vdW, chargeballs, fixed potentials or ionic/lattice optimization in the same run.\n");
 		if(e.exCorr.needFiniteDifference_dVxc()) die("phonon-dfpt requires an analytic LDA/GGA XC kernel.\n");
+		// The phonon driver sets finite-q geometry and calls setup again only
+		// when it needs to solve a response. Avoid four unused full-mesh
+		// wavefunction arrays during ground-state initialization and merge.
+		if(commensurate) {
+			checkSupportedFeatures(e,e.eInfo);
+			logPrintf("DFPT response allocation deferred until a missing q is solved.\n");
+			return;
+		}
 	}
 	const ElecInfo &eInfo = e.eInfo;
 
@@ -128,7 +142,11 @@ void PerturbationInfo::setup(const Everything &e, const ElecVars &eVars)
 		dn.resize(eVars.Vscloc.size());
 		nullToZero(dn, e.gInfo);
 	} else {
-		initInc(dC, 2*eInfo.nStates, eInfo.nBands, &eInfo);
+		// Finite-q phonon Hessians assign dC from the solver state before use.
+		// Reserving duplicate, uninitialized wavefunctions here wastes a full
+		// pair of electronic meshes and can exhaust GPU/host memory at setup.
+		if(phononGrid.isNonzero()) { dC.clear(); dC.resize(2*eInfo.nStates); }
+		else initInc(dC, 2*eInfo.nStates, eInfo.nBands, &eInfo);
 		initInc(Cinc, 2*eInfo.nStates, eInfo.nBands, &eInfo);
 		offsetStatesReady = false;
 		dVsclocpq.resize(eVars.Vscloc.size());
@@ -338,6 +356,7 @@ void PerturbationInfo::initInc(std::vector<ColumnBundle>& Y, int nbundles, int n
 		for(int q=eInfo->qStart; q<eInfo->qStop; q++) {
 			int kpq = q ;
 			int kmq = q + eInfo->nStates;
+			if(!inPhononKBatch(q)) { Y[kpq].free(); Y[kmq].free(); continue; }
 			Y[kpq].init(ncols, kplusq_basis[q].nbasis * eInfo->spinorLength(), &kplusq_basis[q], &kplusq_vectors[q], isGpuEnabled());
 			if(oneSidedResponse) Y[kmq].free();
 			else Y[kmq].init(ncols, kminusq_basis[q].nbasis * eInfo->spinorLength(), &kminusq_basis[q], &kminusq_vectors[q], isGpuEnabled());

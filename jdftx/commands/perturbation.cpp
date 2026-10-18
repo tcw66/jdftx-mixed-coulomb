@@ -409,6 +409,81 @@ struct CommandPhononDFPTQGroups : public Command
 	{ logPrintf("%d",e.pertInfo.phononQGroups); }
 } commandPhononDFPTQGroups;
 
+struct CommandPhononDFPTCheckpoint : public Command
+{
+	CommandPhononDFPTCheckpoint() : Command("phonon-dfpt-checkpoint", "jdftx/Perturb")
+	{
+		format="<directory>";
+		comments="Save and reuse completed representative-q responses in this directory.\n"
+			"Created if absent (its parent must exist). Checkpoints are published atomically after each q.\n"
+			"With electron-phonon export, save screened potentials so final export uses a common band gauge.\n"
+			"Use identical physical inputs and converged ground states for every job sharing a directory.";
+		require("phonon-dfpt");
+	}
+	void process(ParamList& pl,Everything& e)
+	{ pl.get(e.pertInfo.phononCheckpoint,string(),"checkpoint directory",true); }
+	void printStatus(Everything& e,int iRep)
+	{ logPrintf("%s",e.pertInfo.phononCheckpoint.c_str()); }
+} commandPhononDFPTCheckpoint;
+
+struct CommandPhononDFPTQBatch : public Command
+{
+	CommandPhononDFPTQBatch() : Command("phonon-dfpt-q-batch", "jdftx/Perturb")
+	{
+		format="<index> <count>";
+		comments="Solve only this 1-based batch of symmetry-independent q representatives.\n"
+			"Representative ordinal r (starting at zero) belongs to batch 1 + r modulo count.\n"
+			"Completed responses are reused; batch jobs write checkpoints only, without final phonon outputs.\n"
+			"Run phonon-dfpt-merge yes after all batches finish. Each q still uses the full electronic k mesh.";
+		require("phonon-dfpt-checkpoint");
+		forbid("phonon-dfpt-merge");
+	}
+	void process(ParamList& pl,Everything& e)
+	{
+		pl.get(e.pertInfo.phononQBatch,0,"batch index",true);
+		pl.get(e.pertInfo.phononQBatches,1,"batch count",true);
+		if(e.pertInfo.phononQBatch<1 || e.pertInfo.phononQBatch>e.pertInfo.phononQBatches)
+			throw string("Require 1 <= batch index <= batch count");
+	}
+	void printStatus(Everything& e,int iRep)
+	{ logPrintf("%d %d",e.pertInfo.phononQBatch,e.pertInfo.phononQBatches); }
+} commandPhononDFPTQBatch;
+
+struct CommandPhononDFPTKBatch : public Command
+{
+	CommandPhononDFPTKBatch() : Command("phonon-dfpt-k-batch-size", "jdftx/Perturb") {
+		format="<local-k-points>";
+		comments="Stream phonon response work using at most this many electronic k points per rank.\n"
+			"Zero uses the ordinary solver. Positive values retain the full k integration and all bands.\n"
+			"Requires uniform full-mesh weights. Every outer screening iteration sums all k batches.\n"
+			"Extra passes verify a bound on the original coupled residual and contract final forces\n"
+			"without retaining all responses. Fixed-number metallic Gamma screening is included.";
+		require("phonon-dfpt");
+	}
+	void process(ParamList& pl,Everything& e) {
+		pl.get(e.pertInfo.phononKBatchSize,0,"local k batch size",true);
+		if(e.pertInfo.phononKBatchSize<0) throw string("k batch size must be nonnegative");
+	}
+	void printStatus(Everything& e,int iRep) { logPrintf("%d",e.pertInfo.phononKBatchSize); }
+} commandPhononDFPTKBatch;
+
+struct CommandPhononDFPTMerge : public Command
+{
+	CommandPhononDFPTMerge() : Command("phonon-dfpt-merge", "jdftx/Perturb")
+	{
+		format="<yes|no>";
+		comments="Read all completed-q checkpoints and write final outputs without solving responses.\n"
+			"Reject missing or incompatible checkpoints. Electron-phonon matrices are contracted in one\n"
+			"common ground-state gauge using checkpointed screened potentials; CPU and GPU are supported.";
+		require("phonon-dfpt-checkpoint");
+		forbid("phonon-dfpt-q-batch");
+	}
+	void process(ParamList& pl,Everything& e)
+	{ pl.get(e.pertInfo.phononMerge,false,boolMap,"merge checkpoints",true); }
+	void printStatus(Everything& e,int iRep)
+	{ logPrintf("%s",boolMap.getString(e.pertInfo.phononMerge)); }
+} commandPhononDFPTMerge;
+
 struct CommandPhononDFPTDisplacements : public Command
 {
 	CommandPhononDFPTDisplacements() : Command("phonon-dfpt-displacement-symmetries", "jdftx/Perturb")
@@ -574,3 +649,18 @@ struct CommandPhononDFPTInitialState : public Command
 	void printStatus(Everything& e,int iRep)
 	{ logPrintf("%s %s",e.pertInfo.phononInitialInput.c_str(),e.pertInfo.phononInitialState.c_str()); }
 } commandPhononDFPTInitialState;
+
+struct CommandPhononDFPTIBZStorage : public Command
+{
+	CommandPhononDFPTIBZStorage() : Command("phonon-dfpt-ibz-storage", "jdftx/Perturb") {
+		format="<yes|no>";
+		comments="Keep the symmetry-reduced ground state on the host and reconstruct only active k batches.\n"
+			"The ground state is polished on its original IBZ. k and k+/-q states are reconstructed\n"
+			"with space-group translations and time reversal; off-mesh offsets are solved as usual.\n"
+			"Requires phonon-dfpt-initial-state, positive phonon-dfpt-k-batch-size and dump End None.\n"
+			"Force contractions and native electron-phonon export also use bounded k batches.";
+		require("phonon-dfpt-initial-state"); require("phonon-dfpt-k-batch-size");
+	}
+	void process(ParamList& pl,Everything& e) { pl.get(e.pertInfo.phononIBZStorage,false,boolMap,"IBZ storage",true); }
+	void printStatus(Everything& e,int iRep) { logPrintf("%s",boolMap.getString(e.pertInfo.phononIBZStorage)); }
+} commandPhononDFPTIBZStorage;

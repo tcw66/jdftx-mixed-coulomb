@@ -140,6 +140,17 @@ const std::vector<string>& getPseudopotentialPrefixes(); //implemented in ion_sp
 void SpeciesInfo::setup(const Everything &everything)
 {	e = &everything;
 	if(!atpos.size()) return; //unused species
+	// Bound retained nonlocal projectors independently of the allocation pool.
+	// Large k meshes otherwise retain a full projector bundle at every k.
+	if(const char* setting=getenv("JDFTX_PROJECTOR_CACHE_MIB")) {
+		char* end=nullptr;
+		double mib=strtod(setting,&end);
+		if(end==setting || *end || !std::isfinite(mib) || mib<0.
+			|| mib>=double(SIZE_MAX)/(1024.*1024.))
+			die("JDFTX_PROJECTOR_CACHE_MIB must be a finite nonnegative number.\n");
+		setProjectorCacheLimit(size_t(mib*1024.*1024.));
+		logPrintf("Nonlocal projector cache limit: %.3f MiB per species/rank.\n",mib);
+	}
 	
 	//Read pseudopotential
 	ifstream ifs;

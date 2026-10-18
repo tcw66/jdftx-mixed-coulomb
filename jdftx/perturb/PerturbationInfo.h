@@ -125,7 +125,16 @@ public:
 	double phononEphCacheMiB = 512.; //!< Maximum cached real-space export wavefunctions per rank
 	bool phononEphReciprocity = true; //!< Contract one member of each Hermitian k pair
 	string phononInitialInput, phononInitialState; //!< Input and state pattern of a symmetry-reduced SCF restart
+	bool phononIBZStorage = false; //!< Retain only reduced ground states; reconstruct active k batches
+	std::shared_ptr<class DFPTGroundState> phononGroundState;
 	int phononQGroups = 1; //!< Independent MPI groups for representative q points
+	string phononCheckpoint; //!< Directory of atomic, completed-q response checkpoints
+	string phononCheckpointInput; //!< Parsed physical input used to validate response checkpoints
+	int phononQBatch = 0, phononQBatches = 1; //!< Optional 1-based representative batch
+	bool phononMerge = false; //!< Require all checkpoints; export without response solves
+	int phononKBatchSize = 0; //!< Stream fixed-potential response work by local electronic k points
+	int phononKBatchStart = -1, phononKBatchStop = -1; //!< Internal active local k range
+	bool inPhononKBatch(int k) const { return phononKBatchStart<0 || (k>=phononKBatchStart && k<phononKBatchStop); }
 	bool phononCache = true; //!< Reuse frozen-ground-state and bare perturbation data within each q
 	double phononSourceCacheMiB = 128.; //!< Maximum retained source-vector storage per MPI rank
 	bool phononBalanceQGroups = true; //!< Assign representative q points by estimated work

@@ -216,6 +216,54 @@ if(Python3_Interpreter_FOUND AND NUMPY_STATUS EQUAL 0 AND DFPT_H_PSEUDO)
 	endif()
 	add_test(NAME dfptElectronPhonon COMMAND ${Python3_EXECUTABLE}
 		${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkElectronPhonon.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_H_PSEUDO})
+	add_test(NAME dfptQBatches COMMAND ${Python3_EXECUTABLE}
+		${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkQBatches.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_H_PSEUDO})
+	add_test(NAME dfptQBatchesMetallic COMMAND ${Python3_EXECUTABLE}
+		${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkQBatches.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_H_PSEUDO} --metallic)
+	add_test(NAME dfptQBatchesPhononOnly COMMAND ${Python3_EXECUTABLE}
+		${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkQBatches.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_H_PSEUDO} --phonon-only)
+	set_tests_properties(dfptQBatches dfptQBatchesMetallic dfptQBatchesPhononOnly PROPERTIES TIMEOUT 600)
+	add_test(NAME dfptKBatchesMetallic COMMAND ${Python3_EXECUTABLE}
+		${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkQBatches.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_H_PSEUDO} --metallic)
+	add_test(NAME dfptKBatchesPhononOnly COMMAND ${Python3_EXECUTABLE}
+		${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkQBatches.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_H_PSEUDO} --phonon-only)
+	set_tests_properties(dfptKBatchesMetallic dfptKBatchesPhononOnly PROPERTIES TIMEOUT 600
+		ENVIRONMENT "DFPT_K_BATCH_SIZE=1")
+	add_test(NAME dfptIBZStorageNSCF COMMAND ${Python3_EXECUTABLE}
+		${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkQBatches.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_H_PSEUDO} --metallic)
+	add_test(NAME dfptIBZStorageOffMesh COMMAND ${Python3_EXECUTABLE}
+		${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkQBatches.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_H_PSEUDO} --phonon-only)
+	set_tests_properties(dfptIBZStorageNSCF PROPERTIES TIMEOUT 600
+		ENVIRONMENT "DFPT_K_BATCH_SIZE=1;DFPT_IBZ_STORAGE=1;DFPT_IBZ_NSCF=1")
+	set_tests_properties(dfptIBZStorageOffMesh PROPERTIES TIMEOUT 600
+		ENVIRONMENT "DFPT_K_BATCH_SIZE=1;DFPT_IBZ_STORAGE=1")
+	if(EnableCUDA)
+		add_test(NAME dfptQBatchesGPU COMMAND ${Python3_EXECUTABLE}
+			${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkQBatches.py ${CMAKE_BINARY_DIR}/jdftx_gpu ${DFPT_H_PSEUDO})
+		set_tests_properties(dfptQBatchesGPU PROPERTIES TIMEOUT 600 RESOURCE_LOCK jdftx_gpu
+			ENVIRONMENT "DFPT_BATCH_BINARY=${CMAKE_BINARY_DIR}/jdftx")
+		add_test(NAME dfptKBatchesGPU COMMAND ${Python3_EXECUTABLE}
+			${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkQBatches.py ${CMAKE_BINARY_DIR}/jdftx_gpu ${DFPT_H_PSEUDO} --metallic)
+		set_tests_properties(dfptKBatchesGPU PROPERTIES TIMEOUT 600 RESOURCE_LOCK jdftx_gpu
+			ENVIRONMENT "DFPT_K_BATCH_SIZE=1")
+		add_test(NAME dfptIBZStorageGPU COMMAND ${Python3_EXECUTABLE}
+			${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkQBatches.py ${CMAKE_BINARY_DIR}/jdftx_gpu ${DFPT_H_PSEUDO} --metallic)
+		set_tests_properties(dfptIBZStorageGPU PROPERTIES TIMEOUT 600 RESOURCE_LOCK jdftx_gpu
+			ENVIRONMENT "DFPT_K_BATCH_SIZE=1;DFPT_IBZ_STORAGE=1;DFPT_IBZ_NSCF=1")
+	endif()
+	if(EnableMPI AND MPIEXEC_EXECUTABLE)
+		add_test(NAME dfptQBatchesMPI COMMAND ${Python3_EXECUTABLE}
+			${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkQBatches.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_H_PSEUDO} ${MPIEXEC_EXECUTABLE})
+		set_tests_properties(dfptQBatchesMPI PROPERTIES TIMEOUT 600 PROCESSORS 4)
+		add_test(NAME dfptKBatchesMPI COMMAND ${Python3_EXECUTABLE}
+			${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkQBatches.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_H_PSEUDO} --metallic ${MPIEXEC_EXECUTABLE})
+		set_tests_properties(dfptKBatchesMPI PROPERTIES TIMEOUT 600 PROCESSORS 4
+			ENVIRONMENT "DFPT_K_BATCH_SIZE=1")
+		add_test(NAME dfptIBZStorageMPI COMMAND ${Python3_EXECUTABLE}
+			${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkQBatches.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_H_PSEUDO} --metallic ${MPIEXEC_EXECUTABLE})
+		set_tests_properties(dfptIBZStorageMPI PROPERTIES TIMEOUT 600 PROCESSORS 4
+			ENVIRONMENT "DFPT_K_BATCH_SIZE=1;DFPT_IBZ_STORAGE=1")
+	endif()
 	add_test(NAME dfptElectronPhononEmbeddedSlab COMMAND ${Python3_EXECUTABLE}
 		${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkElectronPhonon.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_H_PSEUDO} --embedded)
 	set_tests_properties(dfptElectronPhonon dfptElectronPhononEmbeddedSlab PROPERTIES TIMEOUT 300)
@@ -271,6 +319,16 @@ find_file(DFPT_SI_PSEUDO Si_ONCV_PBE.upf PATHS
     ${CMAKE_BINARY_DIR}/pseudopotentials/SG15
     "$ENV{JDFTX_PSEUDO_DIR}/SG15")
 if(Python3_Interpreter_FOUND AND NUMPY_STATUS EQUAL 0 AND DFPT_SI_PSEUDO)
+	if(EnableMPI AND MPIEXEC_EXECUTABLE)
+		add_test(NAME dfptIBZStorageSymmetry COMMAND ${Python3_EXECUTABLE}
+			${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkElectronPhononSymmetry.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_SI_PSEUDO}
+			--ibz-storage --launcher ${MPIEXEC_EXECUTABLE} --rank-flag=${MPIEXEC_NUMPROC_FLAG})
+		set_tests_properties(dfptIBZStorageSymmetry PROPERTIES TIMEOUT 900 PROCESSORS 3)
+	else()
+		add_test(NAME dfptIBZStorageSymmetry COMMAND ${Python3_EXECUTABLE}
+			${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkElectronPhononSymmetry.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_SI_PSEUDO} --ibz-storage)
+		set_tests_properties(dfptIBZStorageSymmetry PROPERTIES TIMEOUT 900)
+	endif()
     add_test(NAME dfptElectronPhononSymmetry COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkElectronPhononSymmetry.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_SI_PSEUDO})
     set_tests_properties(dfptElectronPhononSymmetry PROPERTIES TIMEOUT 1200)

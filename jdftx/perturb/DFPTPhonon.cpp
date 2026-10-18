@@ -1,5 +1,6 @@
 /* Primitive-cell DFPT phonons and validation. GPL v3 or later; part of JDFTx. */
 #include <perturb/DFPTPhonon.h>
+#include <perturb/DFPTGroundState.h>
 #include <perturb/PerturbationSolver.h>
 #include <electronic/Everything.h>
 #include <electronic/ElecMinimizer.h>
@@ -12,6 +13,7 @@
 #include <core/LatticeUtils.h>
 #include <core/Units.h>
 #include <gsl/gsl_sf_erf.h>
+#include <perturb/DFPTCheckpoint.h>
 
 namespace {
 struct QSymmetry {
@@ -101,7 +103,7 @@ struct ElectronPhononExportCache {
 	ElectronPhononExportCache(Everything& e,const ElectronPhononMesh& mesh) : e(e),wavefunctions(mesh.indices.size()) {
 		size_t used=0,limit=size_t(e.pertInfo.phononEphCacheMiB*1024.*1024.);
 		if(e.pertInfo.phononOptimize) for(size_t i=0;i<mesh.indices.size();i++) {
-			int k=mesh.indices[i]; if(!e.eInfo.isMine(k)) continue;
+			int k=mesh.indices[i]; if(!e.eInfo.isMine(k) || !e.eVars.C[k]) continue;
 			size_t bytes=size_t(e.eInfo.nBands)*e.basis[k].gInfo->nr*sizeof(complex);
 			if(bytes>limit-used) continue;
 			wavefunctions[i]=realSpaceColumns(e.eVars.C[k]); used+=bytes;
@@ -149,13 +151,18 @@ public:
 			for(size_t j=0;j<mesh.indices.size();j++)
 				if(sameReciprocalPoint(targetQnums[i].k,mesh.kpoints[j])) {targetIndices[i]=j; break;}
 			if(targetIndices[i]<0) die("Missing commensurate electron-phonon target k point.\n");
-			if(ei.isMine(k)) {
+			if(ei.isMine(k) && (!p.phononGroundState || e.eVars.C[k])) {
 				targetBases[i].setup(e.gInfoWfns ? *e.gInfoWfns : e.gInfo,e.iInfo,e.cntrl.Ecut,targetQnums[i].k);
 				targets[i].init(ei.nBands,targetBases[i].nbasis,&targetBases[i],&targetQnums[i],isGpuEnabled());
 				targets[i].zero();
 			}
 		}
-		for(int s:mesh.indices) {
+		if(p.phononGroundState) {
+			std::vector<std::pair<int,ColumnBundle*>> requests;
+			for(size_t i=0;i<mesh.indices.size();i++) if(targets[i])
+				requests.emplace_back(mesh.indices[targetIndices[i]],&targets[i]);
+			p.phononGroundState->reconstruct(requests);
+		} else for(int s:mesh.indices) {
 			ColumnBundle received;
 			ColumnBundle& source=ei.isMine(s) ? e.eVars.C[s] : received;
 			if(!ei.isMine(s)) source.init(ei.nBands,e.basis[s].nbasis,&e.basis[s],&ei.qnums[s],isGpuEnabled());
@@ -180,6 +187,7 @@ public:
 		const ElecInfo& ei=e.eInfo;
 		size_t nk=mesh.indices.size(),blockSize=size_t(ei.nBands)*ei.nBands;
 		std::vector<complex> payload(nk*blockSize,complex());
+		std::vector<int> processed(nk,0);
 		complexScalarFieldArray total;
 		if(e.pertInfo.phononOptimize) {
 			total.resize(potential.size());
@@ -189,7 +197,8 @@ public:
 		for(size_t i=0;i<nk;i++) {
 			int k=mesh.indices[i];
 			if(reciprocity && size_t(targetIndices[i])<i) continue;
-			if(!ei.isMine(k)) continue;
+			if(!ei.isMine(k) || !targets[i]) continue;
+			processed[i]=1;
 			matrix derivative;
 			if(e.pertInfo.phononOptimize) {
 				ColumnBundle local=cache.wavefunctions[i].nData()
@@ -216,6 +225,7 @@ public:
 			contractions++;
 		}
 		if(mpiWorld->nProcesses()>1) mpiWorld->reduceData(payload,MPIUtil::ReduceSum,0);
+		mpiWorld->allReduceData(processed,MPIUtil::ReduceMax);
 		mpiWorld->allReduce(contractions,MPIUtil::ReduceSum);
 		if(fp) {
 			std::vector<complex> reversed(blockSize);
@@ -225,7 +235,7 @@ public:
 					die_alone("Error writing electron-phonon derivatives.\n");
 			};
 			for(size_t i=0;i<nk;i++) {
-				size_t target=targetIndices[i]; if(reciprocity && target<i) continue;
+				size_t target=targetIndices[i]; if(!processed[i]) continue;
 				const complex* data=payload.data()+i*blockSize;
 				write(target,i,data);
 				if(reciprocity && target!=i) {
@@ -607,19 +617,23 @@ matrix slabIonicOffDiagonal(const matrix3<>& R, const std::vector<Atom>& atoms,
 }
 
 // Explicit second ionic-potential derivative at fixed electronic state.
-double bareElectronicElement(Everything& e, const AtomicMode& a, const AtomicMode& b)
+double bareElectronicElement(Everything& e, const AtomicMode& a, const AtomicMode& b,bool includeLocal=true)
 {
 	if(a.sp!=b.sp || a.at!=b.at) return 0.;
 	auto sp=e.iInfo.species[a.sp];
-	ScalarFieldTilde V,rho,ball,core,tau;
-	nullToZero(V,e.gInfo); nullToZero(rho,e.gInfo);
-	sp->updateLocal(V,rho,ball,core,tau,a.at);
-	// Differentiate the point-charge source before applying embedded Coulomb.
-	ScalarFieldTilde second=D(D(V,a.dirCartesian),b.dirCartesian)
-		+(*e.coulomb)(D(D(rho,a.dirCartesian),b.dirCartesian),Coulomb::PointChargeRight);
-	double result=dot(J(e.eVars.get_nTot()),O(second));
+	double result=0.;
+	if(includeLocal) {
+		ScalarFieldTilde V,rho,ball,core,tau;
+		nullToZero(V,e.gInfo); nullToZero(rho,e.gInfo);
+		sp->updateLocal(V,rho,ball,core,tau,a.at);
+		// Differentiate the point-charge source before applying embedded Coulomb.
+		ScalarFieldTilde second=D(D(V,a.dirCartesian),b.dirCartesian)
+			+(*e.coulomb)(D(D(rho,a.dirCartesian),b.dirCartesian),Coulomb::PointChargeRight);
+		result=dot(J(e.eVars.get_nTot()),O(second));
+	}
 	double nl=0.;
 	for(int k=e.eInfo.qStart;k<e.eInfo.qStop;k++) {
+		if(!e.eVars.C[k]) continue;
 		const ColumnBundle& C=e.eVars.C[k];
 		ColumnBundle P=sp->getVatom(C,a.at);
 		if(!P.nCols()) continue;
@@ -707,12 +721,15 @@ void loadSymmetryReducedDFPTState(Everything& e,bool dryRun)
 		double threshold=symmThreshold, squared=symmThresholdSq;
 		~RestoreTolerance() {symmThreshold=threshold; symmThresholdSq=squared;}
 	} restoreTolerance;
-	Everything source;
+	auto sourceOwner=std::make_shared<Everything>();
+	Everything& source=*sourceOwner;
 	parse(readInputFile(e.pertInfo.phononInitialInput),source,false);
 	if(source.pertInfo.phononGrid.isNonzero() || !source.pertInfo.phononInitialInput.empty()
-		|| source.pertInfo.solverParams.nIterations || source.cntrl.fixed_H || source.vibrations
+		|| source.pertInfo.solverParams.nIterations || (source.cntrl.fixed_H && !e.pertInfo.phononIBZStorage) || source.vibrations
 		|| source.ionicMinParams.nIterations || source.latticeMinParams.nIterations || source.ionicDynParams.nSteps)
-		die("phonon-dfpt-initial-state requires a ground-state SCF input.\n");
+		die("phonon-dfpt-initial-state requires a ground-state input (fixed-density NSCF is supported with IBZ storage).\n");
+	if(source.cntrl.fixed_H && source.eVars.nFilenamePattern.empty())
+		die("IBZ NSCF restart requires fix-electron-density, including the converged density files.\n");
 	if(source.eInfo.spinType!=SpinNone || e.eInfo.spinType!=SpinNone
 		|| source.cntrl.basisKdep!=BasisKpointDep || source.exCorr.exxFactor())
 		die("Symmetry-reduced DFPT restart requires nonmagnetic scalar states in a k-dependent basis.\n");
@@ -729,7 +746,7 @@ void loadSymmetryReducedDFPTState(Everything& e,bool dryRun)
 		const auto& a=*e.iInfo.species[s]; const auto& b=*source.iInfo.species[s];
 		if(a.potfilename!=b.potfilename || a.atpos.size()!=b.atpos.size())
 			die("Symmetry-reduced DFPT restart must use identical pseudopotentials and atom ordering.\n");
-		for(size_t at=0;at<a.atpos.size();at++)
+		for(size_t at=0;at<a.atpos.size() && !e.pertInfo.phononIBZStorage;at++)
 			if(!sameReciprocalPoint(a.atpos[at],b.atpos[at]))
 				die("Symmetry-reduced DFPT restart has different atomic positions.\n");
 	}
@@ -740,9 +757,11 @@ void loadSymmetryReducedDFPTState(Everything& e,bool dryRun)
 	if(!dryRun && (!isReadable(source.eVars.wfnsFilename) || !isReadable(source.eInfo.initialFillingsFilename)))
 		die("Symmetry-reduced DFPT restart requires both wavefunctions and fillings.\n");
 	if(dryRun && !isReadable(source.eInfo.initialFillingsFilename)) source.eInfo.initialFillingsFilename.clear();
-	source.eVars.eigsFilename.clear(); source.eVars.readConversion.reset();
+	source.eVars.eigsFilename=source.cntrl.fixed_H ? stateFile("eigenvals") : string();
+	source.eVars.readConversion.reset();
 	source.dump.clear(); source.eVars.skipWfnsInit=dryRun;
 	source.setup();
+	if(e.pertInfo.phononIBZStorage) e.pertInfo.checkSupportedFeatures(source,source.eInfo);
 	if(e.coulombParams.embed && !(source.gInfo.S==e.gInfo.S))
 		die("Symmetry-reduced embedded DFPT restart must match the FFT grid.\n");
 	// Automatic symmetry setup may make a near-symmetric source geometry
@@ -780,6 +799,13 @@ void loadSymmetryReducedDFPTState(Everything& e,bool dryRun)
 	}
 	if(source.symm.mode==SymmetriesNone)
 		die("Use initial-state for a full-mesh checkpoint; phonon-dfpt-initial-state expects a symmetry-enabled SCF input.\n");
+	if(e.pertInfo.phononIBZStorage) for(const auto& op:source.symm.getMatrices())
+		for(const auto& k:e.eInfo.qnums) {
+			bool found=false;
+			for(const auto& other:e.eInfo.qnums)
+				if(sameReciprocalPoint(k.k*op.rot,other.k) && fabs(k.weight-other.weight)<1e-12) { found=true; break; }
+			if(!found) die("IBZ storage requires the full electronic mesh to preserve the source crystal symmetries. Use a compatible k mesh or a smaller source symmetry group.\n");
+		}
 	logPrintf("DFPT ground-state expansion: %d reduced states -> %d full-mesh states.\n",source.eInfo.nStates,e.eInfo.nStates);
 	if(dryRun) return;
 	std::vector<int> owners(e.eInfo.nStates),inverts(e.eInfo.nStates),operations(e.eInfo.nStates);
@@ -787,6 +813,12 @@ void loadSymmetryReducedDFPTState(Everything& e,bool dryRun)
 		size_t index;
 		source.symm.getKpointMap(k,index,inverts[k],operations[k]);
 		owners[k]=reducedToSource[index];
+	}
+	if(e.pertInfo.phononIBZStorage) {
+		e.pertInfo.phononGroundState=std::make_shared<DFPTGroundState>(e,std::move(sourceOwner),
+			std::move(owners),std::move(inverts),std::move(operations));
+		logPrintf("Deferring full-mesh ground-state reconstruction to active DFPT k batches.\n");
+		return;
 	}
 	init(e.eVars.C,e.eInfo.nStates,e.eInfo.nBands,&e.basis[0],&e.eInfo);
 	for(int s=0;s<source.eInfo.nStates;s++) {
@@ -840,6 +872,8 @@ void calculateDFPTPhonons(Everything& e,const MPIUtil* parent)
 	int nGroups=parent ? p.phononQGroups : 1;
 	int groupIndex=parent ? mpiWorld->procDivision.iGroup : 0;
 	bool outputHead=parent ? parent->isHead() : mpiWorld->isHead();
+	bool batch=p.phononQBatch!=0;
+	bool exportEph=p.phononElectronPhonon && !batch;
 	bool occupied=true;
 	for(int k=e.eInfo.qStart;k<e.eInfo.qStop;k++)
 		for(double f:e.eVars.F[k]) occupied &= fabs(f-1.)<1e-12;
@@ -868,63 +902,48 @@ void calculateDFPTPhonons(Everything& e,const MPIUtil* parent)
 		}
 	}
 	if(modes.empty()) die("phonon-dfpt requires at least one atom.\n");
-	elecFluidMinimize(e);
-	p.groundStateReady=true;
-	e.eVars.elecEnergyAndGrad(e.ener,nullptr,nullptr,true);
-	if(metallic) {
-		PerturbationSolver(e).computeMetallicGroundStates();
-		e.eVars.setEigenvectors();
-		double Bz=0.;
-		double mu=e.eInfo.findMu(e.eVars.Hsub_eigs,e.eInfo.nElectrons,Bz);
-		double tail=0.;
-		for(int k=e.eInfo.qStart;k<e.eInfo.qStop;k++) {
-			// elecEnergyAndGrad computes fillings from Haux_eigs, including
-			// in SCF mode. Keep it consistent with the refined eigenbasis.
-			e.eVars.Haux_eigs[k]=e.eVars.Hsub_eigs[k];
-			e.eVars.F[k]=e.eInfo.smear(mu,e.eVars.Hsub_eigs[k]);
-			tail=std::max(tail,e.eVars.F[k].back());
-		}
-		mpiWorld->allReduce(tail,MPIUtil::ReduceMax);
-		if(tail>1e-6) die("Metallic DFPT needs more empty bands: highest-band occupation exceeds 1e-6. Increase elec-n-bands.\n");
+	if(p.phononGroundState) p.phononGroundState->prepare(parent);
+	else {
+		elecFluidMinimize(e);
+		p.groundStateReady=true;
 		e.eVars.elecEnergyAndGrad(e.ener,nullptr,nullptr,true);
-		logPrintf("Metallic DFPT: smearing density-matrix response, fixed electron number, highest-band occupation %.6le.\n",tail);
-	}
-	if(p.phononElectronPhonon) {
-		e.eVars.setEigenvectors();
-		logPrintf("Electron-phonon export: reconstructing screened potentials under q/displacement symmetries; band contractions use the full electronic mesh.\n");
-	}
-	// Fixed-screening equations are independent by source eigenstate. Occupied
-	// insulating subspaces may otherwise retain an arbitrary unitary gauge.
-	if(p.phononNestedSolver && !metallic) e.eVars.setEigenvectors();
-	if(p.phononElectronPhonon) {
-		synchronizeElectronPhononStates(e,parent);
-		// Write the actual eigenstates used in every matrix element, rather
-		// than relying on the gauge of the input SCF checkpoint.
-		if(groupIndex==0) {
-			e.eInfo.write(e.eVars.C,e.dump.getFilename("wfns").c_str());
-			e.eInfo.write(e.eVars.Hsub_eigs,e.dump.getFilename("eigenvals").c_str());
-			std::vector<diagMatrix> externalFillings=e.eVars.F;
-			for(int k=e.eInfo.qStart;k<e.eInfo.qStop;k++) externalFillings[k]*=2.;
-			e.eInfo.write(externalFillings,e.dump.getFilename("fillings").c_str());
+		if(metallic) {
+			PerturbationSolver(e).computeMetallicGroundStates();
+			e.eVars.setEigenvectors();
+			double Bz=0.;
+			double mu=e.eInfo.findMu(e.eVars.Hsub_eigs,e.eInfo.nElectrons,Bz);
+			double tail=0.;
+			for(int k=e.eInfo.qStart;k<e.eInfo.qStop;k++) {
+				// elecEnergyAndGrad computes fillings from Haux_eigs, including
+				// in SCF mode. Keep it consistent with the refined eigenbasis.
+				e.eVars.Haux_eigs[k]=e.eVars.Hsub_eigs[k];
+				e.eVars.F[k]=e.eInfo.smear(mu,e.eVars.Hsub_eigs[k]);
+				tail=std::max(tail,e.eVars.F[k].back());
+			}
+			mpiWorld->allReduce(tail,MPIUtil::ReduceMax);
+			if(tail>1e-6) die("Metallic DFPT needs more empty bands: highest-band occupation exceeds 1e-6. Increase elec-n-bands.\n");
+			e.eVars.elecEnergyAndGrad(e.ener,nullptr,nullptr,true);
+			logPrintf("Metallic DFPT: smearing density-matrix response, fixed electron number, highest-band occupation %.6le.\n",tail);
 		}
-		if(outputHead) {
-			string filename=e.dump.getFilename("phononHsub");
-			FILE* fp=fopen(filename.c_str(),"wb");
-			if(!fp || fclose(fp)) die_alone("Cannot create electron-phonon output '%s'.\n",filename.c_str());
-			filename=e.dump.getFilename("phononKpts");
-			fp=fopen(filename.c_str(),"w");
-			if(!fp) die_alone("Cannot write commensurate electron-phonon k points.\n");
-			fprintf(fp,"#K-pts commensure with phonon supercell:\n");
-			for(const auto& k:ephMesh->kpoints) fprintf(fp,"%+.7f %+.7f %+.7f\n",k[0],k[1],k[2]);
-			if(fclose(fp)) die_alone("Error closing electron-phonon k points.\n");
-			logPrintf("Exporting native phononHsub: %d commensurate k points, %zu Cartesian modes, %d bands.\n",nq,modes.size(),e.eInfo.nBands);
+		if(p.phononElectronPhonon) {
+			e.eVars.setEigenvectors();
+			logPrintf("Electron-phonon export: reconstructing screened potentials under q/displacement symmetries; band contractions use the full electronic mesh.\n");
 		}
-		bool ready=true; (parent ? parent : mpiWorld)->bcast(ready);
+		// Fixed-screening equations are independent by source eigenstate. Occupied
+		// insulating subspaces may otherwise retain an arbitrary unitary gauge.
+		if((p.phononNestedSolver || p.phononKBatchSize) && !metallic) e.eVars.setEigenvectors();
+		if(exportEph) synchronizeElectronPhononStates(e,parent);
 	}
+
 	int nm=modes.size();
 	matrix bare=zeroes(nm,nm);
-	for(int a=0;a<nm;a++) for(int b=0;b<nm;b++)
-		bare.set(a,b,bareElectronicElement(e,modes[a]->mode,modes[b]->mode));
+	int groundBatches=p.phononGroundState ? p.phononGroundState->batches() : 1;
+	for(int batch=0;batch<groundBatches;batch++) {
+		if(p.phononGroundState) p.phononGroundState->loadBatch(batch);
+		for(int a=0;a<nm;a++) for(int b=0;b<nm;b++)
+			bare.set(a,b,bare(a,b)+bareElectronicElement(e,modes[a]->mode,modes[b]->mode,batch==0));
+	}
+	if(p.phononGroundState) p.phononGroundState->release();
 	std::vector<vector3<>> qpoints;
 	for(int i=0;i<grid[0];i++) for(int j=0;j<grid[1];j++) for(int k=0;k<grid[2];k++) {
 		vector3<> q(double(i)/grid[0],double(j)/grid[1],double(k)/grid[2]);
@@ -989,9 +1008,16 @@ void calculateDFPTPhonons(Everything& e,const MPIUtil* parent)
 			costs[i]+=0.25*orbit*nm*double(ephMesh->indices.size())/e.eInfo.nStates;
 		}
 	}
-	std::vector<int> qGroups(independent.size());
-	if(p.phononBalanceQGroups) qGroups=balanceDFPTQGroups(costs,groupCapacities);
-	else for(size_t i=0;i<independent.size();i++) qGroups[i]=i%nGroups;
+	std::vector<int> qGroups(independent.size(),-1),selected;
+	std::vector<double> selectedCosts;
+	for(size_t i=0;i<independent.size();i++)
+		if(!batch || int(i%p.phononQBatches)==p.phononQBatch-1) {
+			selected.push_back(i); selectedCosts.push_back(costs[i]);
+		}
+	std::vector<int> selectedGroups(selected.size());
+	if(p.phononBalanceQGroups) selectedGroups=balanceDFPTQGroups(selectedCosts,groupCapacities);
+	else for(size_t i=0;i<selected.size();i++) selectedGroups[i]=i%nGroups;
+	for(size_t i=0;i<selected.size();i++) qGroups[selected[i]]=selectedGroups[i];
 	if(nGroups>1) {
 		for(int group=0;group<nGroups;group++) {
 			int representatives=0,solves=0; double work=0.;
@@ -1002,19 +1028,21 @@ void calculateDFPTPhonons(Everything& e,const MPIUtil* parent)
 				group+1,nGroups,representatives,solves,work,groupCapacities[group]);
 		}
 	}
+	// Plans form part of the on-disk compatibility check as well as the MPI check.
+	std::vector<int> signature{nSigns,int(symmetries.size()),int(independent.size()),nm};
+	signature.insert(signature.end(),independent.begin(),independent.end());
+	signature.insert(signature.end(),responseOffsets.begin(),responseOffsets.end());
+	for(const auto& plan:displacementPlans) signature.insert(signature.end(),plan.columns.begin(),plan.columns.end());
+	for(const auto& sym:symmetries) {
+		for(int i=0;i<3;i++) for(int j=0;j<3;j++) signature.push_back(sym.op.rot(i,j));
+		signature.insert(signature.end(),sym.atomMap.begin(),sym.atomMap.end());
+		for(const auto& shift:sym.cellShift) for(int d=0;d<3;d++) signature.push_back(shift[d]);
+	}
+	DFPTCheckpoint checkpoint(e,parent,signature);
 	if(parent) {
 		// Plans must agree before independent work: otherwise even the length
 		// of the residual gather could differ between q communicators.
-		std::vector<int> signature{nSigns,int(symmetries.size()),int(independent.size()),nm};
-		signature.insert(signature.end(),independent.begin(),independent.end());
-		signature.insert(signature.end(),responseOffsets.begin(),responseOffsets.end());
 		signature.insert(signature.end(),qGroups.begin(),qGroups.end());
-		for(const auto& plan:displacementPlans) signature.insert(signature.end(),plan.columns.begin(),plan.columns.end());
-		for(const auto& sym:symmetries) {
-			for(int i=0;i<3;i++) for(int j=0;j<3;j++) signature.push_back(sym.op.rot(i,j));
-			signature.insert(signature.end(),sym.atomMap.begin(),sym.atomMap.end());
-			for(const auto& shift:sym.cellShift) for(int d=0;d<3;d++) signature.push_back(shift[d]);
-		}
 		int length=signature.size(); parent->bcast(length);
 		std::vector<int> reference(length);
 		if(parent->isHead()) reference=signature;
@@ -1023,6 +1051,33 @@ void calculateDFPTPhonons(Everything& e,const MPIUtil* parent)
 		parent->allReduce(consistent,MPIUtil::ReduceLAnd);
 		if(!consistent) die("DFPT symmetry plans differ between q groups; converge the ground state more tightly or disable q symmetry.\n");
 	}
+	if(p.phononMerge) checkpoint.requireComplete(independent,parent);
+	if(exportEph) {
+		// Write the actual eigenstates used in every matrix element, rather
+		// than relying on the gauge of the input SCF checkpoint.
+		if(groupIndex==0) {
+			if(p.phononGroundState) p.phononGroundState->writeWavefunctions(e.dump.getFilename("wfns").c_str());
+			else e.eInfo.write(e.eVars.C,e.dump.getFilename("wfns").c_str());
+			e.eInfo.write(e.eVars.Hsub_eigs,e.dump.getFilename("eigenvals").c_str());
+			std::vector<diagMatrix> externalFillings=e.eVars.F;
+			for(int k=e.eInfo.qStart;k<e.eInfo.qStop;k++) externalFillings[k]*=2.;
+			e.eInfo.write(externalFillings,e.dump.getFilename("fillings").c_str());
+		}
+		if(outputHead) {
+			string filename=e.dump.getFilename("phononHsub");
+			FILE* fp=fopen(filename.c_str(),"wb");
+			if(!fp || fclose(fp)) die_alone("Cannot create electron-phonon output '%s'.\n",filename.c_str());
+			filename=e.dump.getFilename("phononKpts");
+			fp=fopen(filename.c_str(),"w");
+			if(!fp) die_alone("Cannot write commensurate electron-phonon k points.\n");
+			fprintf(fp,"#K-pts commensure with phonon supercell:\n");
+			for(const auto& k:ephMesh->kpoints) fprintf(fp,"%+.7f %+.7f %+.7f\n",k[0],k[1],k[2]);
+			if(fclose(fp)) die_alone("Error closing electron-phonon k points.\n");
+			logPrintf("Exporting native phononHsub: %d commensurate k points, %zu Cartesian modes, %d bands.\n",nq,modes.size(),e.eInfo.nBands);
+		}
+		bool ready=true; (parent ? parent : mpiWorld)->bcast(ready);
+	}
+
 	std::vector<matrix> Fq(nq);
 	for(int iq=0;iq<nq;iq++) {
 		Fq[iq]=matrix(nm,nm);
@@ -1031,40 +1086,60 @@ void calculateDFPTPhonons(Everything& e,const MPIUtil* parent)
 	std::vector<double> residuals(responseOffsets.back(),0.);
 	for(size_t iRepresentative=0;iRepresentative<independent.size();iRepresentative++) {
 		if(qGroups[iRepresentative]!=groupIndex) continue;
+		if(batch && int(iRepresentative%p.phononQBatches)!=p.phononQBatch-1) continue;
 		int iq=independent[iRepresentative];
 		vector3<> q=qpoints[iq];
 		p.qvec=q; p.commensurate=false;
-		p.setup(e,e.eVars);
-		PerturbationSolver solver(e);
-		std::vector<SpaceGroupOp> responseOperations;
-		for(const auto& sym:symmetries) responseOperations.push_back(sym.op);
-		solver.setResponseSymmetries(responseOperations);
 		std::vector<complexScalarFieldArray> inducedPotentials;
-		matrix F=bare+ionicForceMatrix(e.gInfo.R,atoms,q,e.coulombParams);
 		const auto& plan=displacementPlans[iRepresentative];
-		for(size_t ia=0;ia<plan.columns.size();ia++) {
-			int a=plan.columns[ia];
-			logPrintf("DFPT phonon q %d/%d (representative %zu/%zu, group %d/%d), displacement %zu/%zu (Cartesian column %d/%d)\n",iq+1,nq,iRepresentative+1,independent.size(),groupIndex+1,nGroups,ia+1,plan.columns.size(),a+1,nm);
-			p.datom=modes[a];
-			solver.solvePerturbation();
-			if(p.phononElectronPhonon) {
-				inducedPotentials.push_back(clone(p.dVsclocpq));
+		matrix F(nm,nm);
+		std::vector<double> qResiduals;
+		bool loaded=checkpoint.load(iq,plan.columns,F,qResiduals,inducedPotentials);
+		if(!loaded && p.phononMerge) die("Missing DFPT checkpoint for representative q %d; complete all batches before merging.\n",iq+1);
+		if(!loaded) {
+			if(!p.phononKBatchSize) p.setup(e,e.eVars);
+			PerturbationSolver solver(e);
+			std::vector<SpaceGroupOp> responseOperations;
+			for(const auto& sym:symmetries) responseOperations.push_back(sym.op);
+			solver.setResponseSymmetries(responseOperations);
+			F=bare+ionicForceMatrix(e.gInfo.R,atoms,q,e.coulombParams);
+			qResiduals.resize(plan.columns.size());
+			for(size_t ia=0;ia<plan.columns.size();ia++) {
+				int a=plan.columns[ia];
+				logPrintf("DFPT phonon q %d/%d (representative %zu/%zu, group %d/%d), displacement %zu/%zu (Cartesian column %d/%d)\n",iq+1,nq,iRepresentative+1,independent.size(),groupIndex+1,nGroups,ia+1,plan.columns.size(),a+1,nm);
+				p.datom=modes[a];
+				std::vector<complex> streamedForces;
+				if(p.phononKBatchSize) streamedForces=solver.solvePhononKBatch(modes);
+				else solver.solvePerturbation();
+				if(p.phononElectronPhonon) {
+					inducedPotentials.push_back(clone(p.dVsclocpq));
+					// Keep completed columns in host memory while subsequent GPU
+					// responses run. Export/checkpoint I/O can move them back as needed.
+					if(!p.phononCheckpoint.empty())
+						for(auto& field:inducedPotentials.back()) field->data();
+				}
+				qResiduals[ia]=p.lastResponseResidual;
+				// Freeze this response: calcdGradTau below does not change dC.
+				for(int b=0;b<nm;b++) {
+					p.datom=modes[b];
+					complex response=p.phononKBatchSize ? streamedForces[b] : solver.forceResponse();
+					F.set(b,a,F(b,a)+response);
+				}
 			}
-			residuals[responseOffsets[iRepresentative]+ia]=p.lastResponseResidual;
-			// Freeze this response: calcdGradTau below does not change dC.
-			for(int b=0;b<nm;b++) {
-				p.datom=modes[b];
-				complex response=solver.forceResponse();
-				F.set(b,a,F(b,a)+response);
-			}
+			solver.reportPhononCache();
+			F=reconstructDisplacements(F,plan);
+			double herm=nrm2(F-dagger(F))/std::max(1e-30,nrm2(F));
+			logPrintf("DFPT force matrix Hermiticity relative error: %.6le\n",herm);
+			if(!std::isfinite(herm) || herm>1e-3)
+				die("DFPT force matrix is not Hermitian; converge the ground and offset states more tightly.\n");
+			F=dagger_symmetrize(F);
+			checkpoint.save(iq,plan.columns,F,qResiduals,inducedPotentials);
+			// Export/next-q setup can allocate a new set of states. Completed
+			// checkpoints no longer need these response vectors on the GPU.
+			if(exportEph || !p.phononCheckpoint.empty()) solver.releasePhononResponse();
 		}
-		solver.reportPhononCache();
-		F=reconstructDisplacements(F,plan);
-		double herm=nrm2(F-dagger(F))/std::max(1e-30,nrm2(F));
-		logPrintf("DFPT force matrix Hermiticity relative error: %.6le\n",herm);
-		if(!std::isfinite(herm) || herm>1e-3)
-			die("DFPT force matrix is not Hermitian; converge the ground and offset states more tightly.\n");
-		F=dagger_symmetrize(F);
+		std::copy(qResiduals.begin(),qResiduals.end(),residuals.begin()+responseOffsets[iRepresentative]);
+		if(batch) continue;
 		matrix reversed(nm,nm);
 		const complex* original=F.data();
 		complex* conjugated=reversed.data();
@@ -1079,11 +1154,10 @@ void calculateDFPTPhonons(Everything& e,const MPIUtil* parent)
 			for(int i=0;i<nm*nm;i++) sum[i]+=add[i];
 			counts[target]++;
 		}
-		if(p.phononElectronPhonon) {
-			ManagedMemoryBase::reportAllocationCache("response complete");
-			solver.releasePhononResponse();
+		if(exportEph) {
 			ManagedMemoryBase::reportAllocationCache("response released");
-			ElectronPhononExportCache exportCache(e,*ephMesh);
+			std::unique_ptr<ElectronPhononExportCache> retainedExportCache;
+			if(!p.phononGroundState) retainedExportCache.reset(new ElectronPhononExportCache(e,*ephMesh));
 			// The complete orbit belongs to this q group, so output blocks remain
 			// disjoint even though only the representative response was solved.
 			for(int target=0;target<nq;target++) if(representatives[target]==iq) {
@@ -1093,14 +1167,26 @@ void calculateDFPTPhonons(Everything& e,const MPIUtil* parent)
 				PerturbationSolver exportSolver(e);
 				int partner=qGridIndex(-qpoints[target],grid);
 				bool reciprocity=p.phononOptimize && p.phononEphReciprocity && representatives[partner]==iq;
-				ElectronPhononWriter writer(e,exportSolver,*ephMesh,exportCache,reciprocity);
-				for(int a=0;a<nm;a++) {
-					p.datom=modes[a];
-					writer.writeDisplacement(a,massScale[a],potentials[a]);
+				for(int batch=0;batch<groundBatches;batch++) {
+					if(p.phononGroundState) p.phononGroundState->loadBatch(batch);
+					std::unique_ptr<ElectronPhononExportCache> batchCache;
+					if(p.phononGroundState) batchCache.reset(new ElectronPhononExportCache(e,*ephMesh));
+					ElectronPhononWriter writer(e,exportSolver,*ephMesh,batchCache ? *batchCache : *retainedExportCache,reciprocity);
+					for(int a=0;a<nm;a++) {
+						p.datom=modes[a];
+						writer.writeDisplacement(a,massScale[a],potentials[a]);
+					}
 				}
+				if(p.phononGroundState) p.phononGroundState->release();
 			}
 			p.qvec=q;
 		}
+	}
+	if(batch) {
+		bool finished=true; (parent ? parent : mpiWorld)->bcast(finished);
+		logPrintf("DFPT q batch %d/%d complete; checkpoints saved. Run phonon-dfpt-merge yes after all batches finish.\n",p.phononQBatch,p.phononQBatches);
+		p.datom.reset();
+		return;
 	}
 	if(parent) {
 		// Only each group head contributes: group-local reductions have already

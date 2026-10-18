@@ -145,5 +145,7 @@ void run(string inputFilename, bool dryRun, bool printDefaults)
 	}
 
 	//Final dump:
-	if(qGroups.outputGroup()) e.dump(DumpFreq_End, 0);
+	// The IBZ path writes its own bounded native outputs; on SIGQUIT the
+	// generic dumper would implicitly add State and access absent full states.
+	if(qGroups.outputGroup() && !e.pertInfo.phononIBZStorage) e.dump(DumpFreq_End, 0);
 }

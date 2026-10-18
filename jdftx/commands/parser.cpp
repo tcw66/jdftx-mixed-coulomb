@@ -319,6 +319,21 @@ void safeProcess(Command& c, string params, Everything& everything,
 
 void parse(std::vector< pair<string,string> > input, Everything& everything, bool printDefaults)
 {
+	// Keep a conservative, order-preserving input signature for DFPT checkpoints.
+	// Execution/output controls may change between batch jobs and final export.
+	const set<string> checkpointControls = {"phonon-dfpt-checkpoint", "phonon-dfpt-q-batch",
+		"phonon-dfpt-merge", "phonon-dfpt-q-groups", "phonon-dfpt-balance-q-groups",
+		"phonon-dfpt-k-batch-size", "phonon-dfpt-ibz-storage",
+		"phonon-dfpt-cache", "phonon-dfpt-source-cache-size", "phonon-dfpt-eph-cache-size",
+		"phonon-dfpt-optimize", "phonon-dfpt-eph-reciprocity", "phonon-dfpt-reuse-offset-states",
+		"dump", "dump-name", "dump-interval", "initial-state", "phonon-dfpt-initial-state"};
+	for(const auto& entry:input) if(!checkpointControls.count(entry.first)) {
+		istringstream words(entry.second);
+		string word;
+		everything.pertInfo.phononCheckpointInput += entry.first;
+		while(words >> word) everything.pertInfo.phononCheckpointInput += " " + word;
+		everything.pertInfo.phononCheckpointInput += "\n";
+	}
 	//Process the input in multiple passes: (Be helpful by collecting all errors, if any, before dying)
 	ProcessedCommandMap cmap;
 	set<string> unknown; //unknown command names

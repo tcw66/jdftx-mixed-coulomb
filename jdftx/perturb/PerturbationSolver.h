@@ -51,6 +51,7 @@ public:
 	void precondition(PerturbationGradient& v) override;
 	void Ksqrt(PerturbationGradient& v) override;
 	void solvePerturbation();
+	std::vector<complex> solvePhononKBatch(const std::vector<std::shared_ptr<class AtomPerturbation>>& modes);
 	void reportPhononCache() const; //!< Log per-q cache usage on the group head
 	void releasePhononResponse(); //!< Release q response storage once force contractions are complete
 	void setResponseSymmetries(const std::vector<SpaceGroupOp>& operations);
@@ -63,7 +64,7 @@ public:
 	void getGrad(std::vector<ColumnBundle> *grad, std::vector<ColumnBundle> Y); //!< Get gradient of E w.r.t Y, used for finite difference tests.
 	
 	void computeIncommensurateWfns(); //!< Compute occupied offset states in the fixed ground-state potential
-	void computeMetallicGroundStates(); //!< Converge also the nearly empty source bands in the frozen SCF potential
+	void computeMetallicGroundStates(bool updateDensity=true); //!< Converge empty source bands; optionally retain a fixed NSCF density
 
 	
 	void getdn(ScalarFieldArray& dn, const std::vector<ColumnBundle>* dC, const std::vector<ColumnBundle>* C = 0); //!< Derivative of density w.r.t. wavefunctions
@@ -149,7 +150,9 @@ private:
 	void expandKResponse();
 	void symmetrizeResponseDensity(complexScalarFieldArray& density) const;
 	double responseWeight(int k) const;
-	bool activeResponse(int k) const { return responseWeight(k)>0.; }
+	bool activeResponse(int k) const { return pInfoInKBatch(k) && responseWeight(k)>0.; }
+	bool pInfoInKBatch(int k) const;
+	bool streamedUnprojected=false; //!< Apply Gamma charge projection after summing all streamed k batches
 	// The phonon driver creates one solver per q and keeps the ground state
 	// fixed across its displacement solves. Other callers always refresh data.
 	bool groundCachesReady=false;

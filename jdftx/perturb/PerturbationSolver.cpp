@@ -18,6 +18,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 -------------------------------------------------------------------*/
 
 #include <perturb/PerturbationSolver.h>
+#include <perturb/DFPTGroundState.h>
 #include <perturb/TestPerturbation.h>
 #include <electronic/Everything.h>
 #include <electronic/ElecMinimizer.h>
@@ -135,6 +136,8 @@ void PerturbationSolver::setResponseSymmetries(const std::vector<SpaceGroupOp>& 
 
 double PerturbationSolver::responseWeight(int k) const
 { return kReductionActive ? responseWeights[k] : eInfo.qnums[k].weight; }
+
+bool PerturbationSolver::pInfoInKBatch(int k) const { return pInfo.inPhononKBatch(k); }
 
 int PerturbationSolver::responseSigns() const
 { return (pInfo.commensurate || pInfo.oneSidedResponse) ? 1 : 2; }
@@ -947,6 +950,9 @@ void PerturbationSolver::setupMetallicResponse()
 	for(int k=eInfo.qStart;k<eInfo.qStop;k++) {
 		metallicSqrtF[k]=eVars.F[k];
 		for(double& f:metallicSqrtF[k]) f=sqrt(std::max(0.,f));
+		for(double eps:eVars.Hsub_eigs[k])
+			metallicDOS-=eInfo.qnums[k].weight*eInfo.smearPrime(metallicMu,eps);
+		if(!activeResponse(k)) continue;
 		for(int sign=0;sign<2;sign++) {
 			int index=k+sign*eInfo.nStates;
 			ColumnBundle& C=pInfo.Cinc[index];
@@ -968,8 +974,6 @@ void PerturbationSolver::setupMetallicResponse()
 			}
 			metallicWeights[index]=W;
 		}
-		for(double eps:eVars.Hsub_eigs[k])
-			metallicDOS-=eInfo.qnums[k].weight*eInfo.smearPrime(metallicMu,eps);
 	}
 	mpiWorld->allReduce(tail,MPIUtil::ReduceMax);
 	mpiWorld->allReduce(metallicDOS,MPIUtil::ReduceSum);
@@ -993,6 +997,7 @@ matrix metallicHadamard(const matrix& a,const matrix& b)
 
 void PerturbationSolver::metallicProject(std::vector<ColumnBundle>& X) const
 {
+	if(streamedUnprojected) return;
 	if(pInfo.qvec.length_squared()>1e-20) return;
 	// Constrain the Gamma response to zero total charge (Eq. 75). In this
 	// square-root representation this is an orthogonal projection along the
@@ -1358,6 +1363,7 @@ void PerturbationSolver::releasePhononResponse()
 	pInfo.kplusq_vectors.clear(); pInfo.kminusq_vectors.clear(); pInfo.offsetStatesReady=false;
 	metallicWeights.clear(); metallicEnergies.clear(); metallicSqrtF.clear();
 	barePotentialPlus.clear(); barePotentialMinus.clear();
+	barePotentialReady=false; barePotentialAtom=nullptr;
 }
 
 void PerturbationSolver::reportPhononCache() const
@@ -1484,7 +1490,7 @@ double minimizeOffsetDavidson(PerturbationSolver& solver, ColumnBundle& occupied
 }
 }
 
-void PerturbationSolver::computeMetallicGroundStates()
+void PerturbationSolver::computeMetallicGroundStates(bool updateDensity)
 {
 	// An energy minimization barely constrains exponentially empty bands.
 	// Their eigenvalues and wavefunctions still enter the divided differences,
@@ -1500,7 +1506,11 @@ void PerturbationSolver::computeMetallicGroundStates()
 	logPrintf("Metallic source-state maximum residual [Hartree]: %.6le\n",residual);
 	if(!std::isfinite(residual) || residual>1e-6)
 		die("Metallic DFPT source bands did not converge; increase electronic-minimize nIterations.\n");
-	eVars.elecEnergyAndGrad(e.ener,nullptr,nullptr,true);
+	if(updateDensity) eVars.elecEnergyAndGrad(e.ener,nullptr,nullptr,true);
+	else for(int k=eInfo.qStart;k<eInfo.qStop;k++) {
+		ColumnBundle HC;
+		eVars.applyHamiltonian(k,eye(eInfo.nBands),HC,e.ener,true);
+	}
 }
 
 void PerturbationSolver::computeIncommensurateWfns()
@@ -1513,8 +1523,15 @@ void PerturbationSolver::computeIncommensurateWfns()
 	params.knormThreshold = 0.;
 	params.fdTest = false;
 	std::vector<int> reused(2*eInfo.nStates,-1);
+	std::vector<int> selected(eInfo.nStates,1);
+	if(pInfo.phononKBatchStart>=0) {
+		std::fill(selected.begin(),selected.end(),0);
+		for(int k=eInfo.qStart;k<eInfo.qStop;k++) if(pInfo.inPhononKBatch(k)) selected[k]=1;
+		mpiWorld->allReduceData(selected,MPIUtil::ReduceMax);
+	}
 	if(pInfo.phononGrid.isNonzero() && pInfo.phononReuseOffsetStates) {
 		for(int sign=0;sign<2;sign++) for(int k=0;k<eInfo.nStates;k++) {
+			if(!selected[k]) continue;
 			const vector3<>& target=sign ? pInfo.kminusq_vectors[k].k : pInfo.kplusq_vectors[k].k;
 			for(int source=0;source<eInfo.nStates;source++) {
 				vector3<> delta=target-eInfo.qnums[source].k;
@@ -1524,13 +1541,21 @@ void PerturbationSolver::computeIncommensurateWfns()
 		}
 		// Broadcast one source at a time, keeping memory bounded and allowing
 		// source and destination k points to belong to different MPI ranks.
-		for(int source=0;source<eInfo.nStates;source++) {
+		if(pInfo.phononGroundState) {
+			std::vector<std::pair<int,ColumnBundle*>> requests;
+			for(int sign=0;sign<2;sign++) for(int k=eInfo.qStart;k<eInfo.qStop;k++) {
+				int index=k+sign*eInfo.nStates;
+				if(pInfo.inPhononKBatch(k) && reused[index]>=0) requests.emplace_back(reused[index],&pInfo.Cinc[index]);
+			}
+			pInfo.phononGroundState->reconstruct(requests);
+		} else for(int source=0;source<eInfo.nStates;source++) {
 			if(std::find(reused.begin(),reused.end(),source)==reused.end()) continue;
 			ColumnBundle received;
 			ColumnBundle& Csource=eInfo.isMine(source) ? eVars.C[source] : received;
 			if(!eInfo.isMine(source)) Csource.init(eInfo.nBands,e.basis[source].nbasis,&e.basis[source],&eInfo.qnums[source],isGpuEnabled());
 			if(mpiWorld->nProcesses()>1) mpiWorld->bcastData(Csource,eInfo.whose(source));
 			for(int sign=0;sign<2;sign++) for(int k=eInfo.qStart;k<eInfo.qStop;k++) {
+				if(!pInfo.inPhononKBatch(k)) continue;
 				int index=k+sign*eInfo.nStates;
 				if(reused[index]!=source) continue;
 				ColumnBundle& target=pInfo.Cinc[index];
@@ -1546,6 +1571,7 @@ void PerturbationSolver::computeIncommensurateWfns()
 	for(int q=eInfo.qStart; q<eInfo.qStop; q++)
 	for(int sign=0; sign<2; sign++)
 	{
+		if(!pInfo.inPhononKBatch(q)) continue;
 		ColumnBundle& C = pInfo.Cinc[q+sign*eInfo.nStates];
 		bool reuse=reused[q+sign*eInfo.nStates]>=0;
 		if(!reuse) // Transfer periodic parts into an off-mesh basis.
