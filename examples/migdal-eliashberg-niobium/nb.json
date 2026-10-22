@@ -1,0 +1,45 @@
+{
+  "wannier_prefix": "/home/tyler/apps/jdftx_defect_coulomb/build/me-niobium-input/wannier.",
+  "wannier_log": "../../build/me-niobium-input/wannier.out",
+  "phonon_prefix": "/home/tyler/Nb_DFPT/phonon.",
+  "metadata_log": "/home/tyler/Nb_DFPT/dfpt.out",
+  "phonon_supercell": [
+    4,
+    4,
+    4
+  ],
+  "kmesh": [
+    12,
+    12,
+    12
+  ],
+  "qmesh": [
+    40,
+    40,
+    40
+  ],
+  "sigma_ev": 0.1,
+  "mu_star": 0.13,
+  "frequency_floor_ev": 1e-05,
+  "imaginary_tolerance_ev": 0.0001,
+  "chunk_size": 64,
+  "spectral_bins": 300,
+  "matsubara_cutoff_ev": 0.5,
+  "coulomb_cutoff_ev": 0.2,
+  "tc_bracket_k": [
+    1.0,
+    80.0
+  ],
+  "temperatures_k": [
+    2.0,
+    4.0,
+    6.0
+  ],
+  "fit_points": 4,
+  "bdg_mesh": [
+    8,
+    8,
+    8
+  ],
+  "output": "results-nb"
+}

@@ -1,0 +1,6 @@
+include common.in
+wannier-initial-state results/scf.$VAR
+wannier-dump-name results/pt.$VAR
+# Atom-derived valence orbitals selected identically for both objectives.
+include results/windows.in
+wannier-minimize nIterations 300 energyDiffThreshold 1e-8 knormThreshold 1e-7

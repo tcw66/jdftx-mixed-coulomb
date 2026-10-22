@@ -1,0 +1,10 @@
+# Empty conventional cubic cell; four Gaussian centers form an FCC array.
+lattice Cubic 6
+coords-type lattice
+coulomb-interaction periodic
+spintype no-spin
+elec-ex-corr gga-PBE
+elec-cutoff 30
+fftbox 32 32 32
+elec-n-bands 40
+# No ions, pseudopotentials, electrons or smearing. All bands are empty.

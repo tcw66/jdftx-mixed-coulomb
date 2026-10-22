@@ -39,7 +39,7 @@ void WannierMinimizer::saveMLWF(int iSpin)
 	initialize(iSpin);
 	
 	//Minimize:
-	double Omega = minimize(wannier.minParams);
+	double Omega = wannier.fixedCenters.empty() ? minimize(wannier.minParams) : minimizeFixedCenters();
 	if(wannier.koopmans && !std::isfinite(Omega))
 		die("KI requires finite localized Wannier orbitals. Use a nonzero wannier-minimize knormThreshold or improve the trial orbitals.\n");
 	for(size_t ik=0; ik<kMesh.size(); ik++)
@@ -52,6 +52,8 @@ void WannierMinimizer::saveMLWF(int iSpin)
 		mpiWorld->bcastData(ki.U, whose(ik));
 		if(ki.U2) ki.U2 = ki.U2(0,nCenters, 0,nCenters); //no longer need unitary completion after minimize
 	}
+	if(wannier.localizationMeasure == Wannier::LM_TruncatedDC)
+		logPrintf("\nTruncatedDC spreads; centers are phase-based estimates. OmegaI is the MV subspace diagnostic, not a decomposition of TDC.\n");
 	double OmegaI = getOmegaI();
 	logPrintf("\nOptimum spread:\n\tOmega:  %.15le\n\tOmegaI: %.15le\n", Omega, OmegaI);
 	
@@ -417,7 +419,8 @@ void WannierMinimizer::saveMLWF_RP(int iSpin, const matrix& phase)
 	logPrintf("Computing <du/dk|...|u> on Wannier mesh ... "); logFlush();
 	std::vector<vector3<matrix>> rMesh(kMesh.size());
 	std::vector<matrix3<matrix>> rrHmesh(kMesh.size());
-	assert(wannier.localizationMeasure == Wannier::LM_FiniteDifference);
+	assert(wannier.localizationMeasure == Wannier::LM_FiniteDifference
+		|| wannier.localizationMeasure == Wannier::LM_TruncatedDC);
 	const WannierMinimizerFD& wmin_fd = *((const WannierMinimizerFD*)this);
 	Cother.assign(e.eInfo.nStates, ColumnBundle());
 	int qInterval = std::max(1, int(round(qCount/20.))); //interval for reporting progress

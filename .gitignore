@@ -1,4 +1,5 @@
 # Out-of-source builds and local analysis outputs
+/output.out
 /build/
 /build-*/
 /build-gpu

@@ -133,6 +133,26 @@ if(Python3_Interpreter_FOUND)
         add_test(NAME dfptInterpolation COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/testInterpolation.py
             ${CMAKE_SOURCE_DIR}/scripts/phononDFPT)
+        execute_process(COMMAND ${Python3_EXECUTABLE} -c "import scipy"
+            RESULT_VARIABLE SCIPY_STATUS OUTPUT_QUIET ERROR_QUIET)
+        if(SCIPY_STATUS EQUAL 0)
+            add_test(NAME migdalEliashberg COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/testMigdalEliashberg.py)
+            set_tests_properties(migdalEliashberg PROPERTIES TIMEOUT 60
+                ENVIRONMENT "OPENBLAS_NUM_THREADS=1;OMP_NUM_THREADS=1")
+            add_test(NAME selfConsistentBdG COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/testSelfConsistentBdG.py)
+            set_tests_properties(selfConsistentBdG PROPERTIES TIMEOUT 60
+                ENVIRONMENT "OPENBLAS_NUM_THREADS=1;OMP_NUM_THREADS=1")
+            add_test(NAME localBdGProfiles COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/testLocalBdGProfiles.py)
+            set_tests_properties(localBdGProfiles PROPERTIES TIMEOUT 60
+                ENVIRONMENT "OPENBLAS_NUM_THREADS=1;OMP_NUM_THREADS=1")
+            add_test(NAME embeddedBdG COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/testEmbeddedBdG.py)
+            set_tests_properties(embeddedBdG PROPERTIES TIMEOUT 60
+                ENVIRONMENT "OPENBLAS_NUM_THREADS=1;OMP_NUM_THREADS=1")
+        endif()
     endif()
 endif()
 
@@ -407,4 +427,21 @@ if(Python3_Interpreter_FOUND AND NUMPY_STATUS EQUAL 0 AND DFPT_B_PSEUDO AND DFPT
     add_test(NAME dfptDisplacementRotations COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/dfpt/checkDisplacementRotations.py ${CMAKE_BINARY_DIR}/jdftx ${DFPT_B_PSEUDO} ${DFPT_N_PSEUDO})
     set_tests_properties(dfptDisplacementRotations PROPERTIES TIMEOUT 150)
+endif()
+
+# Joint subspace/gauge gradient and minimization checks for the TDC measure.
+if(Python3_Interpreter_FOUND AND NUMPY_STATUS EQUAL 0)
+    add_test(NAME wannierFixedCenters COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/wannier/checkFixedCenters.py ${CMAKE_BINARY_DIR})
+    set_tests_properties(wannierFixedCenters PROPERTIES TIMEOUT 180)
+endif()
+if(Python3_Interpreter_FOUND AND BERRY_SI_PSEUDO)
+    add_test(NAME wannierTruncatedDC COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/wannier/checkTruncatedDC.py ${CMAKE_BINARY_DIR})
+    set_tests_properties(wannierTruncatedDC PROPERTIES TIMEOUT 180)
+    if(NUMPY_STATUS EQUAL 0)
+        add_test(NAME wannierFixedAtomicCenters COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/wannier/checkFixedAtomicCenters.py ${CMAKE_BINARY_DIR})
+        set_tests_properties(wannierFixedAtomicCenters PROPERTIES TIMEOUT 180)
+    endif()
 endif()

@@ -34,6 +34,8 @@ public:
 	void initialize(int iSpin);
 	double getOmega(bool grad);
 	double getOmegaI(bool grad);
+	bool getCenterConstraints(std::vector<double>& residual, std::vector<WannierGradient>* jacobian=0);
+	double getOmegaTDC(bool grad); //!< Eq. (7) of Li et al. (2024)
 	
 	//!An edge of the k-mesh involved in the finite difference formula
 	struct Edge

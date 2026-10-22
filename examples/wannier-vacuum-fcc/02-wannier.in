@@ -1,0 +1,9 @@
+include common.in
+wannier-initial-state results/scf.$VAR
+wannier-dump-name results/vac.$VAR
+include results/windows.in
+wannier-center-vacuum Gaussian 0 0 0 1
+wannier-center-vacuum Gaussian 0 0.5 0.5 1
+wannier-center-vacuum Gaussian 0.5 0 0.5 1
+wannier-center-vacuum Gaussian 0.5 0.5 0 1
+wannier-minimize nIterations 300 energyDiffThreshold 1e-8 knormThreshold 1e-7

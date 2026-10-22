@@ -1,0 +1,12 @@
+include common.in
+wannier-initial-state results/scf.$VAR
+wannier-dump-name results/graphene.$VAR
+include results/windows.in
+# Three sigma bonds plus two carbon pz orbitals: includes pi and pi* together.
+# Bond midpoints between C1 and the three equivalent neighbors of C2.
+wannier-center Gaussian  0.1666666666666667 -0.1666666666666667 0 1
+wannier-center Gaussian  0.1666666666666667  0.3333333333333333 0 1
+wannier-center Gaussian -0.3333333333333333 -0.1666666666666667 0 1
+wannier-center C 1 pz
+wannier-center C 2 pz
+wannier-minimize nIterations 300 energyDiffThreshold 1e-8 knormThreshold 1e-7

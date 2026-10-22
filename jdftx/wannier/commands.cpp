@@ -24,6 +24,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 enum WannierMember
 {	WM_addAtomicOrbitals,
 	WM_pinAtomicOrbitals,
+	WM_fixCenters,
 	WM_ignoreSemiCore,
 	WM_localizationMeasure,
 	WM_bStart,
@@ -53,6 +54,7 @@ enum WannierMember
 EnumStringMap<WannierMember> wannierMemberMap
 (	WM_addAtomicOrbitals, "addAtomicOrbitals",
 	WM_pinAtomicOrbitals, "pinAtomicOrbitals",
+	WM_fixCenters, "fixCenters",
 	WM_ignoreSemiCore, "ignoreSemiCore",
 	WM_localizationMeasure, "localizationMeasure",
 	WM_bStart, "bStart",
@@ -80,7 +82,8 @@ EnumStringMap<WannierMember> wannierMemberMap
 
 EnumStringMap<Wannier::LocalizationMeasure> localizationMeasureMap
 (	Wannier::LM_FiniteDifference, "FiniteDifference",
-	Wannier::LM_RealSpace, "RealSpace"
+	Wannier::LM_RealSpace, "RealSpace",
+	Wannier::LM_TruncatedDC, "TruncatedDC"
 );
 
 EnumStringMap<Wannier::SpinMode> spinModeMap
@@ -108,11 +111,17 @@ struct CommandWannier : public Command
 			"\n+ pinAtomicOrbitals yes|no\n\n"
 			"   Whether to pin the atomic orbitals during minimization,\n"
 			"   as in wannier-center-pinned. Default: no.\n"
+			"\n+ fixCenters yes|no\n\n"
+			"   Constrain each optimized Wannier center exactly (to numerical tolerance)\n"
+			"   to its original trial-orbital position. Default: no. Supports inner/outer\n"
+			"   windows with FiniteDifference and TruncatedDC. This adds no penalty.\n"
+			"   For composite trial orbitals, uses the coefficient-squared weighted center.\n"
+			"   Incompatible with explicit wannier-center-constraint targets and soft pinning.\n"
 			"\n+ ignoreSemiCore yes|no\n\n"
 			"   Whether to drop inner orbitals of each angular momentum when adding\n"
 			"   atomic orbitals automatically (no effect if addAtomicOrbitals = no).\n"
 			"   Default: yes.\n"
-			"\n+ localizationMeasure FiniteDifference | RealSpace\n\n"
+			"\n+ localizationMeasure FiniteDifference | RealSpace | TruncatedDC\n\n"
 			"   Controls how the localization of the %Wannier functions is calculated.\n"
 			"   The finite-difference reciprocal space measure of Marzari and Vanderbilt\n"
 			"   (default) is inexpensive, but its error scales as Nkpoints^(-2./3).\n"
@@ -120,6 +129,11 @@ struct CommandWannier : public Command
 			"   and is preferable for quantitative applications. Note that the real-space version\n"
 			"   is not translationally invariant and wraps on a superlattice Wigner-Seitz cell\n"
 			"   centered at the origin.\n"
+			"   TruncatedDC uses the center-independent truncated density-convolution spread\n"
+			"   of Li et al., Phys. Rev. B 110, 085127 (2024), Eq. (7). It supports\n"
+			"   entangled bands with outerWindow and optional innerWindow. Soft penalty\n"
+			"   pinning is unsupported; hard fixCenters constraints are supported.\n"
+			"   Reported centers are phase-based estimates.\n"
 			"\n+ bStart <band>\n\n"
 			"   For fixed band calculations, 0-based index of lowest band used.\n"
 			"   If atomic orbitals have been added with semi-core ignored,\n"
@@ -237,6 +251,9 @@ struct CommandWannier : public Command
 				case WM_pinAtomicOrbitals:
 					pl.get(wannier.pinAtomicOrbitals, false,  boolMap, "pinAtomicOrbitals", true);
 					break;
+				case WM_fixCenters:
+					pl.get(wannier.fixCenters, false, boolMap, "fixCenters", true);
+					break;
 				case WM_ignoreSemiCore:
 					pl.get(wannier.ignoreSemiCore, true,  boolMap, "ignoreSemiCore", true);
 					break;
@@ -346,6 +363,7 @@ struct CommandWannier : public Command
 	{	const Wannier& wannier = ((const WannierEverything&)e).wannier;
 		logPrintf(" \\\n\taddAtomicOrbitals %s", boolMap.getString(wannier.addAtomicOrbitals));
 		logPrintf(" \\\n\tpinAtomicOrbitals %s", boolMap.getString(wannier.pinAtomicOrbitals));
+		logPrintf(" \\\n\tfixCenters %s", boolMap.getString(wannier.fixCenters));
 		logPrintf(" \\\n\tignoreSemiCore %s", boolMap.getString(wannier.ignoreSemiCore));
 		logPrintf(" \\\n\tlocalizationMeasure %s", localizationMeasureMap.getString(wannier.localizationMeasure));
 		logPrintf(" \\\n\tsaveWfns %s", boolMap.getString(wannier.saveWfns));
@@ -538,6 +556,42 @@ struct CommandWannierCenter : public Command
 commandWannierCenter;
 
 
+// Gaussian-only centers for empty cells, without an artificial ion dependency.
+struct CommandWannierCenterVacuum : public CommandWannierCenter
+{
+	std::vector<int> indices;
+	CommandWannierCenterVacuum() : CommandWannierCenter("-vacuum")
+	{	requires.erase("ion");
+		require("latt-scale");
+		require("coords-type");
+		format = "Gaussian <x0> <x1> <x2> [<sigma>=1] [<orbDesc>=s] [<coeff>=1]";
+		comments = "Gaussian-only variant of wannier-center that also works in empty cells.\n"
+			"Positions follow coords-type and sigma is in bohr. No ions or pseudopotentials\n"
+			"are required. Repeat for multiple centers; linear combinations of Gaussians\n"
+			"use the same syntax as wannier-center. Centers are not pinned.\n";
+	}
+	void process(ParamList& pl, Everything& e)
+	{	const string params = pl.getRemainder();
+		// Require a Gaussian first; validate every parsed contribution below.
+		ParamList check(params);
+		string first; check.get(first, string(), "Gaussian", true);
+		if(first != "Gaussian") throw string("Vacuum centers require Gaussian trial orbitals");
+		Wannier& wannier = ((WannierEverything&)e).wannier;
+		const size_t index = wannier.trialOrbitals.size();
+		ParamList gaussian(params);
+		CommandWannierCenter::process(gaussian, e);
+		for(const Wannier::AtomicOrbital& ao: wannier.trialOrbitals.back())
+			if(ao.sp >= 0 || ao.numericalOrbIndex >= 0 || ao.sigma <= 0.)
+				throw string("Vacuum centers require Gaussians with positive sigma");
+		indices.push_back(index);
+	}
+	void printStatus(Everything& e, int iRep)
+	{	CommandWannierCenter::printStatus(e, indices.at(iRep));
+	}
+}
+commandWannierCenterVacuum;
+
+
 struct CommandWannierCenterPinned : public CommandWannierCenter
 {
 	CommandWannierCenterPinned(string suffix=string()) : CommandWannierCenter("-pinned")
@@ -556,6 +610,52 @@ struct CommandWannierCenterPinned : public CommandWannierCenter
 	}
 }
 commandWannierCenterPinned;
+
+
+struct CommandWannierCenterConstraint : public Command
+{
+	CommandWannierCenterConstraint() : Command("wannier-center-constraint", "wannier")
+	{	format = "<center> <x0> <x1> <x2>";
+		comments = "Fix the center of Wannier function <center> (0-based, including frozen centers)\n"
+			"by a nonlinear equality constraint, rather than a localization penalty.\n"
+			"Coordinates follow coords-type. Supported with FiniteDifference and TruncatedDC.\n"
+			"For TruncatedDC this fixes its phase-based center, not a full density-convolution center.\n"
+			"Inner-window constraints remain exact. Targets must be feasible in the chosen subspace.\n"
+			"Frozen Wannier functions cannot be targeted. Repeat for multiple centers.\n";
+		allowMultiple = true;
+		require("coords-type"); require("latt-scale");
+		require("wannier-initial-state"); require("wannier-dump-name");
+	}
+	void process(ParamList& pl, Everything& e)
+	{	int n; vector3<> x;
+		pl.get(n, -1, "center", true);
+		for(int i=0;i<3;i++) pl.get(x[i], 0., "x", true);
+		if(n<0 || !std::isfinite(x.length_squared())) throw string("Invalid center index or coordinates");
+		Wannier& w = ((WannierEverything&)e).wannier;
+		if(w.fixedCenters.count(n)) throw string("Duplicate fixed-center target");
+		w.fixedCenters[n] = e.iInfo.coordsType==CoordsCartesian ? inv(e.gInfo.R)*x : x;
+	}
+	void printStatus(Everything& e, int iRep)
+	{	const auto& w = ((const WannierEverything&)e).wannier;
+		auto it=w.fixedCenters.begin(); std::advance(it,iRep);
+		vector3<> x=e.iInfo.coordsType==CoordsCartesian ? e.gInfo.R*it->second : it->second;
+		logPrintf("%d %.15g %.15g %.15g",it->first,x[0],x[1],x[2]);
+	}
+} commandWannierCenterConstraint;
+
+struct CommandWannierCenterConstraintTolerance : public Command
+{
+	CommandWannierCenterConstraintTolerance() : Command("wannier-center-constraint-tolerance", "wannier")
+	{	format="<tolerance>";
+		comments="Maximum Euclidean fixed-center residual in bohr (default 1e-8).\n";
+	}
+	void process(ParamList& pl, Everything& e)
+	{	double& tol=((WannierEverything&)e).wannier.fixedCenterTolerance;
+		pl.get(tol,1e-8,"tolerance",true);
+		if(!std::isfinite(tol) || tol<=0.) throw string("Tolerance must be positive and finite");
+	}
+	void printStatus(Everything& e,int) { logPrintf("%.15g",((WannierEverything&)e).wannier.fixedCenterTolerance); }
+} commandWannierCenterConstraintTolerance;
 
 
 struct CommandWannierMinimize : public CommandMinimize

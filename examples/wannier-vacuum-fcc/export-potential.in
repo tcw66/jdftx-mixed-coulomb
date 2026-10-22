@@ -1,0 +1,3 @@
+# No export solve is needed: the driver copies zero.Vscloc directly.
+include model.in
+fix-electron-potential results/zero.$VAR

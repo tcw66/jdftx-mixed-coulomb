@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+"""Native Wannier inputs -> isotropic ME -> static spinful Wannier BdG."""
+from me_postprocess.cli import main
+
+if __name__ == '__main__':
+    main()

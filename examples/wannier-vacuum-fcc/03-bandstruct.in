@@ -1,0 +1,6 @@
+include model.in
+include results/bandpath.kpoints
+fix-electron-potential results/bandpotential.$VAR
+electronic-minimize nIterations 200 energyDiffThreshold 1e-11
+dump-name results/bandstruct.$VAR
+dump End BandEigs

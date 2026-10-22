@@ -112,27 +112,33 @@ double WannierMinimizer::compute(WannierGradient* grad, WannierGradient* Kgrad)
 	//Collect Omega_U and propagate to Omega_B if necessary:
 	if(grad)
 	{	watch.start();
-		std::vector<MPIUtil::Request> requests;
-		for(KmeshEntry& ki: kMesh)
-			if(ki.mpi)
-			{	MPIUtil::Request request;
-				ki.mpi->reduceData(ki.Omega_UdotU, MPIUtil::ReduceSum, 0, &request); //Collect Omega_U
-				requests.push_back(request);
-			}
-		MPIUtil::waitAll(requests);
-		grad->init(this);
-		for(size_t ik=ikStart; ik<ikStop; ik++)
-		{	KmeshEntry& ki = kMesh[ik];
-			matrix Omega_B = complex(0,0.5)*(ki.U2(0,ki.nIn, 0,nCenters) * ki.Omega_UdotU * dagger(ki.U2));
-			if(ki.nIn > nCenters) //Stage 1:
-				grad->B1[ik] = Omega_B(ki.nFixed,nCenters, nCenters,ki.nIn);
-			matrix Omega_B2_hlf = Omega_B(nFrozen,nCenters, nFrozen,nCenters);
-			grad->B2[ik] = Omega_B2_hlf + dagger(Omega_B2_hlf);
-		}
+		collectRotationGradient(*grad);
 		if(Kgrad) *Kgrad = precondition(*grad);
 		watch.stop();
 	}
 	return Omega;
+}
+
+
+void WannierMinimizer::collectRotationGradient(WannierGradient& grad)
+{
+	std::vector<MPIUtil::Request> requests;
+	for(KmeshEntry& ki: kMesh)
+		if(ki.mpi)
+		{	MPIUtil::Request request;
+			ki.mpi->reduceData(ki.Omega_UdotU, MPIUtil::ReduceSum, 0, &request); //Collect Omega_U
+			requests.push_back(request);
+		}
+	MPIUtil::waitAll(requests);
+	grad.init(this);
+	for(size_t ik=ikStart; ik<ikStop; ik++)
+	{	KmeshEntry& ki = kMesh[ik];
+		matrix Omega_B = complex(0,0.5)*(ki.U2(0,ki.nIn, 0,nCenters) * ki.Omega_UdotU * dagger(ki.U2));
+		if(ki.nIn > nCenters) //Stage 1:
+			grad.B1[ik] = Omega_B(ki.nFixed,nCenters, nCenters,ki.nIn);
+		matrix Omega_B2_hlf = Omega_B(nFrozen,nCenters, nFrozen,nCenters);
+		grad.B2[ik] = Omega_B2_hlf + dagger(Omega_B2_hlf);
+	}
 }
 
 void WannierMinimizer::constrain(WannierGradient& grad)

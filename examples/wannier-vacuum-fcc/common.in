@@ -1,0 +1,2 @@
+include model.in
+kpoint-folding 8 8 8

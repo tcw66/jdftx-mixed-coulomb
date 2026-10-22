@@ -1,0 +1,12 @@
+# Nonmagnetic fcc Pt test cell, a = 7.41 bohr (3.921 angstrom).
+# The installed SG15 potential is scalar relativistic: no spin-orbit coupling.
+lattice face-centered Cubic 7.41
+coords-type lattice
+ion Pt 0 0 0 0
+include results/pseudo.in
+coulomb-interaction periodic
+spintype no-spin
+elec-ex-corr gga-PBE
+elec-cutoff 40
+elec-n-bands 40
+elec-smearing Fermi 0.01

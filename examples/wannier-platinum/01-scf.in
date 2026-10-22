@@ -1,0 +1,5 @@
+include common.in
+electronic-scf nIterations 150 nEigSteps 30 residualThreshold 1e-8 energyDiffThreshold 0 eigDiffThreshold 0
+converge-empty-states yes
+dump-name results/scf.$VAR
+dump End State BandEigs EigStats Vscloc

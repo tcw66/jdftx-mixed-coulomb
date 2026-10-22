@@ -53,6 +53,9 @@ public:
 	};
 	std::vector<TrialOrbital> trialOrbitals; //!< group of centers
 	bool needAtomicOrbitals;
+	std::map<int, vector3<>> fixedCenters; //!< hard center targets, 0-based total index, lattice coordinates
+	bool fixCenters = false; //!< constrain optimized centers to their original trial-orbital positions
+	double fixedCenterTolerance = 1e-8; //!< maximum center displacement, bohr
 	
 	bool addAtomicOrbitals; //!< whether to automatically add atomic orbitals for all atoms
 	bool pinAtomicOrbitals; //!< whether to pin centers of automatically-added atomic orbitals
@@ -60,7 +63,8 @@ public:
 	
 	enum LocalizationMeasure
 	{	LM_FiniteDifference,
-		LM_RealSpace
+		LM_RealSpace,
+		LM_TruncatedDC
 	}
 	localizationMeasure;
 	

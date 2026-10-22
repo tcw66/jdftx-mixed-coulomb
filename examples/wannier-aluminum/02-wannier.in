@@ -1,0 +1,13 @@
+include common.in
+wannier-initial-state results/scf.$VAR
+wannier-dump-name results/al.$VAR
+# run.sh generates absolute Hartree windows from the SCF Fermi energy.
+include results/windows.in
+
+# Five unpinned trial functions, from JDFTx's entangled-Al tutorial.
+#wannier-center Gaussian -0.101403   0.435547   0.487558
+#wannier-center Gaussian -0.443339   0.055289  -0.446398
+#wannier-center Gaussian -0.361538  -0.010718   0.032397
+#wannier-center Gaussian -0.296948   0.326939  -0.400117
+#wannier-center Gaussian  0.030459  -0.158043  -0.194850
+wannier-minimize nIterations 300 energyDiffThreshold 1e-8 knormThreshold 1e-7

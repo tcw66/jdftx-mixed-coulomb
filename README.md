@@ -12,6 +12,8 @@ This version of [JDFTx](https://github.com/shankar1729/jdftx) provides:
 - Occupied-state Berry-phase bulk polarization and self-consistent finite-field
   dielectric tensors, with ionic and unit-cell relaxation.
 - CPU and CUDA executables in one shared build directory.
+- Truncated density-convolution Wannier localization for entangled bands and
+  hard center constraints at the original trial-orbital positions.
 
 This is the main project guide, including the complete mixed Coulomb method
 and usage instructions. Material-specific inputs and walkthroughs are linked
@@ -20,6 +22,7 @@ in the relevant sections.
 ## Contents
 
 - [Build](#build)
+- [Wannier localization and fixed centers](#wannier-localization-and-fixed-centers)
 - [KI and original PBE band comparison](#ki-and-original-pbe-band-comparison)
   - [Coarse-grid screening workflow](#coarse-grid-screening-workflow)
   - [KI input reference](#ki-input-reference)
@@ -63,6 +66,9 @@ in the relevant sections.
 | [`phonon-dfpt-source-cache-size`](#phonon-dfpt-source-cache-size) | `jdftx` / `jdftx_gpu` |
 | [`phonon-dfpt-symmetries`](#phonon-dfpt-symmetries) | `jdftx` / `jdftx_gpu` |
 | [`wannier-koopmans`](#wannier-koopmans) | `wannier` / `wannier_gpu` |
+| [`wannier-center-vacuum`](#wannier-localization-and-fixed-centers) | `wannier` / `wannier_gpu` |
+| [`wannier-center-constraint`](#wannier-localization-and-fixed-centers) | `wannier` / `wannier_gpu` |
+| [`wannier-center-constraint-tolerance`](#wannier-localization-and-fixed-centers) | `wannier` / `wannier_gpu` |
 | [`wannier-koopmans-response`](#wannier-koopmans-response) | `wannier` / `wannier_gpu` |
 | [`wannier-koopmans-screening-mesh`](#wannier-koopmans-screening-mesh) | `wannier` / `wannier_gpu` |
 | [`wannier-koopmans-reference-density`](#wannier-koopmans-reference-density) | `wannier` / `wannier_gpu` |
@@ -145,6 +151,76 @@ libraries under `share/jdftx/pseudopotentials`.
 
 Python 3 is needed for utility wrappers and regression scripts; band and
 phonon plotting dependencies are listed with their workflows.
+
+## Wannier localization and fixed centers
+
+`wannier` and `wannier_gpu` support the usual Marzari–Vanderbilt measure
+(`localizationMeasure FiniteDifference`) and the truncated density-convolution
+measure (`localizationMeasure TruncatedDC`). TruncatedDC implements Eq. (7)
+of Li, Ko, DiStasio and Damle, *Phys. Rev. B* **110**, 085127 (2024): the
+absolute value is taken **after** averaging diagonal neighbor overlaps over
+k points. Both measures optimize the subspace and gauge for entangled bands
+using `outerWindow` and an optional exact `innerWindow`.
+
+To keep each center at its **original trial-orbital position**, include
+`fixCenters yes` in the existing `wannier` command. For example:
+
+```text
+wannier-initial-state results/scf.$VAR
+wannier-dump-name results/wannier.$VAR
+wannier localizationMeasure TruncatedDC fixCenters yes \
+    innerWindow -0.000001 0.3 outerWindow -0.000001 1.5 \
+    loadRotations no saveWfns no
+wannier-center-constraint-tolerance 1e-8
+wannier-minimize nIterations 300 energyDiffThreshold 1e-8 knormThreshold 1e-7
+```
+
+Window energies are in Hartree and must be chosen for the system. Specify
+trial orbitals separately with `wannier-center`, or include
+`addAtomicOrbitals yes` in that same `wannier` command:
+
+- Gaussian guesses use their input coordinates, including random guesses.
+  `wannier-center-vacuum Gaussian x y z sigma` allows Gaussians in an empty
+  cell without ions or pseudopotentials.
+- Atomic projections such as `wannier-center Si 1 px` use that atom's input
+  position. Automatically added atomic orbitals also use their atom positions.
+  Leave `pinAtomicOrbitals no` when using these hard constraints.
+- Numerical trial orbitals use their assigned position. Composite trial
+  orbitals use JDFTx's coefficient-squared weighted trial position.
+
+Targets come from the trial positions, rather than centers measured after
+projection into the bands. Each orbital stays associated with its own target;
+random guesses are not moved onto a prescribed lattice. Imported frozen
+Wannier functions remain unchanged.
+
+Hard centers are nonlinear equality constraints on the allowed rotations,
+with no added localization penalty. Projected conjugate gradients and Newton
+restoration preserve orthonormality and inner-window inclusion while keeping
+every accepted state within the requested maximum displacement (default
+`1e-8` bohr). `fdTest yes` checks the objective derivative and center Jacobian.
+Hard-center runs use their own direction and line search; generic direction
+and line-search choices do not select this algorithm. `maxThreshold` is
+unsupported. Check localization convergence separately from center accuracy.
+
+For selected orbitals or separately prescribed targets, use
+`wannier-center-constraint <index> <x> <y> <z>` instead of `fixCenters yes`.
+Indices are zero-based, including preceding frozen orbitals, and coordinates
+follow `coords-type`. Targets on frozen orbitals, simultaneous soft/hard
+pinning of one orbital, and RealSpace localization are unsupported.
+Infeasible targets, undefined overlap phases or failed local restoration
+cause an explicit error without relaxing the centers or inner window.
+TruncatedDC constrains the reported phase-based centers, not full
+density-convolution centers.
+
+Runnable examples compare direct and Wannier-interpolated bands for
+[aluminum](examples/wannier-aluminum/README.md),
+[graphene](examples/wannier-graphene/README.md), and
+[platinum](examples/wannier-platinum/README.md). The
+[empty FCC example](examples/wannier-vacuum-fcc/README.md) compares MV and
+TruncatedDC with perturbed and random guesses. Its `fixed_centers.py` driver
+holds random centers at their original positions using 30 Ha states on an
+8×8×8 mesh. Both measures held those centers within `4e-12` bohr in the
+300-iteration CPU test; spread minimization had not yet converged.
 
 ## KI and original PBE band comparison
 
@@ -1512,6 +1588,24 @@ includes a complete valence-bond Wannier input. See the
 [DFPT method and format guide](jdftx/doc/tutorials/phonon/DFPT.dox) for phase
 conventions, normalization and supported features.
 
+### Migdal–Eliashberg post-processing and Wannier BdG
+
+[`migdalEliashberg`](jdftx/scripts/migdalEliashberg) consumes the native Wannier
+Hamiltonian, phonon force constants and Wannier electron–phonon export. It
+computes α²F, coupling moments, Allen–Dynes and linearized ME Tc, nonlinear
+isotropic imaginary-axis solutions and an explicitly assumed local singlet
+Wannier BdG model. A separate `matrix-bdg` path reduces supplied matrix Nambu
+self-energies to coherent static parameters. Both paths export momentum and
+real-space matrices with symmetry checks. See the
+[bulk Nb example](examples/migdal-eliashberg-niobium/README.md) for input
+conventions, approximation limits and the validated local calculation.
+An optional CuPy backend enables CUDA with `--backend cuda --gpu-device 0`;
+`--chunk-size` controls the k-point batch size. CPU remains the default. The
+example documents GPU setup and matched CPU/GPU validation.
+The [self-consistent Nb vacancy example](examples/migdal-eliashberg-niobium/VACANCY.md)
+deletes all six orbitals at one Nb site, fits onsite singlet interactions to the
+bulk ME reference, and iterates spatially varying pairing fields at 2 K.
+
 ## Berry-phase bulk polarization and static dielectric response
 
 `berry-phase-field Ex Ey Ez` minimizes the electric enthalpy
@@ -1591,6 +1685,21 @@ OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=1 \
 ```
 
 Build products and calculation output are not part of the source repository.
+
+Run the Wannier localization and hard-center regressions with:
+
+```bash
+ctest --test-dir build \
+  -R '^wannier(TruncatedDC|FixedCenters|FixedAtomicCenters)$' --output-on-failure
+python3 jdftx/test/wannier/checkFixedCenters.py build --suffix _gpu --np 2
+python3 jdftx/test/wannier/checkFixedAtomicCenters.py build --suffix _gpu --np 2
+```
+
+These check analytic derivatives, entangled-band localization, fixed Gaussian
+and atomic trial positions, automatically added projections, partial Cartesian
+targets, orthonormality and inner-window inclusion. CPU, MPI and two-GPU checks
+passed. Atomic tests require the SG15 Si pseudopotential; the vacuum regression
+requires no pseudopotential.
 
 Run the Berry-phase regressions with:
 

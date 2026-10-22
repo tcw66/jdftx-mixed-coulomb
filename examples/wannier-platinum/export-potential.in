@@ -1,0 +1,6 @@
+# Reconstruct the potential from existing SCF orbitals and fillings.
+include common.in
+initial-state results/scf.$VAR
+dump-only
+dump-name results/bandpotential.$VAR
+dump End Vscloc

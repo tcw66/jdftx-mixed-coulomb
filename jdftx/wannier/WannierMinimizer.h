@@ -112,6 +112,10 @@ protected:
 	bool checkpointCompatible = true; //!< Rotations and overlaps belong to the loaded SCF wavefunctions
 	string checkpointState; //!< Content fingerprint of the SCF files and basis/mesh
 	void checkCheckpoint(int iSpin);
+	void collectRotationGradient(WannierGradient& grad); //!< propagate accumulated overlap derivatives
+	virtual bool getCenterConstraints(std::vector<double>& residual, std::vector<WannierGradient>* jacobian=0);
+	double minimizeFixedCenters(); //!< feasible projected optimization with nonlinear restoration
+	void checkFixedCenterInvariants();
 	int nCenters, nFrozen, nBands; //!< number of Wannier centers (total and frozen) and source bands
 	int nSpins, qCount; //!< number of spins, and number of states per spin
 	int nSpinor; //!< number of spinor components

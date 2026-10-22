@@ -1,0 +1,8 @@
+# Same model as SCF, but independent eigenstates on an unfurled band path.
+include model.in
+include results/bandpath.kpoints
+fix-electron-density results/scf.$VAR
+electronic-minimize nIterations 200 energyDiffThreshold 1e-10
+converge-empty-states yes
+dump-name results/bandstruct.$VAR
+dump End BandEigs

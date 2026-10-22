@@ -172,6 +172,15 @@ WannierMinimizer::WannierMinimizer(const Everything& e, const Wannier& wannier, 
 		rPinned[n] = e.gInfo.R * wannier.trialOrbitals[n-nFrozen].xCenter;
 	}
 	
+
+	for(const auto& target: wannier.fixedCenters)
+	{	const int n=target.first;
+		if(n<nFrozen || n>=nCenters) die("Fixed-center index %d must refer to an optimized Wannier function (range %d to %d).\n",n,nFrozen,nCenters-1);
+		if(pinned[n]) die("A Wannier function cannot have both soft pinning and a hard center constraint.\n");
+		if(wannier.localizationMeasure==Wannier::LM_RealSpace) die("Hard center constraints currently support FiniteDifference and TruncatedDC only.\n");
+		rPinned[n] = e.gInfo.R*target.second; //Choose a continuous center branch about the target.
+	}
+
 	//Check phonon supercell validity:
 	if(wannier.phononSup.length_squared())
 	{	//--- Check that supercell is diagonal in lattice directions:

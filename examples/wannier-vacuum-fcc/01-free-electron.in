@@ -1,0 +1,5 @@
+include common.in
+fix-electron-potential results/zero.$VAR
+electronic-minimize nIterations 200 energyDiffThreshold 1e-11
+dump-name results/scf.$VAR
+dump End State BandEigs EigStats Fillings

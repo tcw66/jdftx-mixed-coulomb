@@ -160,9 +160,21 @@ void Wannier::setup(const Everything& everything)
 		}
 		t.xCenter = (1./wSum) * xSum;
 	}
+	if(fixCenters)
+		for(size_t i=0;i<trialOrbitals.size();i++)
+		{	const int n=nFrozen+i;
+			if(fixedCenters.count(n)) die("Cannot combine fixCenters yes with explicit wannier-center-constraint targets.\n");
+			fixedCenters[n]=trialOrbitals[i].xCenter;
+		}
 	//Initialize minimizer:
 	switch(localizationMeasure)
-	{	case LM_FiniteDifference: wmin = std::make_shared<WannierMinimizerFD>(*e, *this); break;
+	{	case LM_TruncatedDC:
+			Citations::add("Truncated density-convolution Wannier localization",
+				"K. Li, H.-Y. Ko, R. A. DiStasio, Jr. and A. Damle, Phys. Rev. B 110, 085127 (2024)");
+			Citations::add("Variational Wannier functions with entangled bands",
+				"A. Damle, A. Levitt and L. Lin, Multiscale Model. Simul. 17, 167-191 (2019)");
+			// Both reciprocal-space measures use the same overlap mesh.
+		case LM_FiniteDifference: wmin = std::make_shared<WannierMinimizerFD>(*e, *this); break;
 		case LM_RealSpace: wmin = std::make_shared<WannierMinimizerRS>(*e, *this); break;
 	}
 	wmin->initTransformDependent();
