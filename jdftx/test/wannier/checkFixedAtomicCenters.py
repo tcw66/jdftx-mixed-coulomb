@@ -12,6 +12,7 @@ p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('build',type=Path)
 p.add_argument('--suffix',default='')
 p.add_argument('--np',type=int,default=1)
+p.add_argument('--solver',choices=['MatrixFree','Explicit'],default='MatrixFree')
 a=p.parse_args();build=a.build.resolve()
 env=dict(os.environ,OMP_NUM_THREADS='2',OPENBLAS_NUM_THREADS='1')
 launcher=['mpirun','-np',str(a.np)] if a.np>1 else []
@@ -42,6 +43,7 @@ wannier localizationMeasure {measure} fixCenters yes addAtomicOrbitals {'yes' if
 '''
             if not auto:
                 text+=''.join(f'wannier-center Si {atom} {orbital}\n' for atom in (1,2) for orbital in ('s','px','py','pz'))
+            text+=f'wannier-center-constraint-solver {a.solver}\n'
             text+='wannier-minimize nIterations 20 energyDiffThreshold 1e-8 knormThreshold 1e-7 fdTest yes\n'
             (root/(name+'.in')).write_text(text)
             out=run('wannier',name)

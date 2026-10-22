@@ -219,6 +219,16 @@ the original localization functional, with no added center penalty. Every
 accepted optimization state satisfies the center tolerance. The final log
 also checks orthonormality and inclusion of every inner-window state.
 
+The default center solver is now `MatrixFree`: it applies the center Jacobian
+and adjoint directly and uses preconditioned CG for the normal equations.
+It caches rectangular overlaps rather than storing three full rotation
+gradients per center. A true linear-residual check and the original nonlinear
+center tolerance both remain mandatory. To compare against the stored-Jacobian
+reference, add `wannier-center-constraint-solver Explicit`; use `MatrixFree`
+to select the default explicitly. The final log reports persistent derivative
+storage per rank, preparation time and normal-solve time. This storage measure
+excludes the wavefunctions, full-band overlaps and temporary work buffers.
+
 Hard-center runs use projected Polak–Ribiere conjugate gradients, an Armijo
 search and damped Newton restoration. `nIterations`, `energyDiffThreshold`,
 `nEnergyDiff`, `knormThreshold`, `convergeAll`, `alphaTstart` and `fdTest` are

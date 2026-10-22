@@ -35,6 +35,11 @@ public:
 	double getOmega(bool grad);
 	double getOmegaI(bool grad);
 	bool getCenterConstraints(std::vector<double>& residual, std::vector<WannierGradient>* jacobian=0);
+	bool prepareCenterJacobian(std::vector<double>& residual);
+	std::vector<double> applyCenterJacobian(const WannierGradient& v);
+	WannierGradient applyCenterJacobianAdjoint(const std::vector<double>& v);
+	std::vector<double> centerJacobianScaling();
+	size_t centerJacobianStorage() const;
 	double getOmegaTDC(bool grad); //!< Eq. (7) of Li et al. (2024)
 	
 	//!An edge of the k-mesh involved in the finite difference formula
@@ -47,6 +52,10 @@ public:
 	};
 	std::vector< std::vector<Edge> > edges; //!< unidirectional edges on full k-mesh
 	std::vector< std::vector<Edge> > edges_bi; //!< bidirectional edges for full k-mesh (only initialized if saveR or saveRP)
+private:
+	std::vector<matrix> centerLeft, centerRight; //!< rectangular overlap factors for one linearization
+	std::vector<complex> centerZ; //!< individual (MV) or averaged (TDC) diagonal overlaps
+	std::vector<double> centerScaling; //!< positive row scaling for the iterative normal solve
 };
 
 //! @}

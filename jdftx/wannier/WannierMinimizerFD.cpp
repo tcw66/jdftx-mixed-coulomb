@@ -470,7 +470,8 @@ bool WannierMinimizerFD::getCenterConstraints(std::vector<double>& residual,
         {
             const Edge& edge=edges[ik][ib];
             matrix& M=cache[pos++];
-            M=dagger(kMesh[ik].U)*edge.M0*kMesh[edge.ik].U;
+            if(jacobian) M=dagger(kMesh[ik].U)*edge.M0*kMesh[edge.ik].U;
+            else M=dagger(kMesh[ik].U(0,nBands,0,nCenters))*edge.M0*kMesh[edge.ik].U(0,nBands,0,nCenters);
             if(tdc) for(const auto& target: wannier.fixedCenters)
                 rho[ib*nCenters+target.first]+=kMesh[ik].point.weight*M.data()[M.index(target.first,target.first)];
         }

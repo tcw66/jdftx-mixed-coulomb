@@ -434,6 +434,9 @@ if(Python3_Interpreter_FOUND AND NUMPY_STATUS EQUAL 0)
     add_test(NAME wannierFixedCenters COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/wannier/checkFixedCenters.py ${CMAKE_BINARY_DIR})
     set_tests_properties(wannierFixedCenters PROPERTIES TIMEOUT 180)
+    add_test(NAME wannierFixedCentersScaling COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/wannier/benchmarkFixedCenters.py ${CMAKE_BINARY_DIR})
+    set_tests_properties(wannierFixedCentersScaling PROPERTIES TIMEOUT 180)
 endif()
 if(Python3_Interpreter_FOUND AND BERRY_SI_PSEUDO)
     add_test(NAME wannierTruncatedDC COMMAND ${Python3_EXECUTABLE}

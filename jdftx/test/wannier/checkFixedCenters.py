@@ -13,6 +13,7 @@ p.add_argument('build',type=Path)
 p.add_argument('--suffix',default='')
 p.add_argument('--np',type=int,default=1)
 p.add_argument('--work',type=Path)
+p.add_argument('--solver',choices=['MatrixFree','Explicit','Both'],default='Both')
 a=p.parse_args();build=a.build.resolve()
 temp=None
 if a.work:
@@ -33,8 +34,9 @@ run('jdftx','scf')
 targets=np.array([[0,0,0],[0,.5,.5],[.5,0,.5],[.5,.5,0]])
 trials=targets+.02*np.random.default_rng(23).normal(size=(4,3))
 (root/'cartesian.in').write_text((root/'common.in').read_text().replace('coords-type lattice','coords-type cartesian'))
-for measure,partial in [('FiniteDifference',False),('TruncatedDC',False),('TruncatedDC',True)]:
-    name=measure.lower()+('-partial-cartesian' if partial else '')
+solvers=['MatrixFree','Explicit'] if a.solver=='Both' else [a.solver]
+for measure,partial,solver in [(m,p,s) for m,p in [('FiniteDifference',False),('TruncatedDC',False),('TruncatedDC',True)] for s in solvers]:
+    name=measure.lower()+('-partial-cartesian' if partial else '')+('-explicit' if solver=='Explicit' else '')
     target_cart=6*(targets if partial else trials).copy()
     if partial: target_cart[0]+=[.01,.02,.03]
     selected=[0] if partial else range(4)
@@ -43,6 +45,7 @@ for measure,partial in [('FiniteDifference',False),('TruncatedDC',False),('Trunc
     if not partial:text=text.replace('localizationMeasure '+measure,'localizationMeasure '+measure+' fixCenters yes')
     text+=''.join('wannier-center-vacuum Gaussian '+' '.join(map(str,row))+' 1\n' for row in (6*trials if partial else trials))
     if partial:text+=''.join(f'wannier-center-constraint {i} '+' '.join(map(str,target_cart[i]))+'\n' for i in selected)
+    text+=f'wannier-center-constraint-solver {solver}\n'
     text+='wannier-minimize nIterations 50 energyDiffThreshold 1e-8 knormThreshold 1e-7 fdTest yes\n'
     (root/(name+'.in')).write_text(text)
     out=run('wannier',name)

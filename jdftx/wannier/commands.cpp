@@ -657,6 +657,20 @@ struct CommandWannierCenterConstraintTolerance : public Command
 	void printStatus(Everything& e,int) { logPrintf("%.15g",((WannierEverything&)e).wannier.fixedCenterTolerance); }
 } commandWannierCenterConstraintTolerance;
 
+struct CommandWannierCenterConstraintSolver : public Command
+{
+	CommandWannierCenterConstraintSolver() : Command("wannier-center-constraint-solver", "wannier")
+	{	format="MatrixFree|Explicit";
+		comments="Center equality solver: MatrixFree (default) uses Jacobian products and preconditioned CG; Explicit stores the Jacobian and uses a dense pseudoinverse.\n";
+	}
+	void process(ParamList& pl, Everything& e)
+	{	string mode;pl.get(mode,string("MatrixFree"),"solver",true);
+		if(mode!="MatrixFree" && mode!="Explicit") throw string("Expected MatrixFree or Explicit");
+		((WannierEverything&)e).wannier.fixedCenterMatrixFree=(mode=="MatrixFree");
+	}
+	void printStatus(Everything& e,int) { logPrintf("%s",((WannierEverything&)e).wannier.fixedCenterMatrixFree?"MatrixFree":"Explicit"); }
+} commandWannierCenterConstraintSolver;
+
 
 struct CommandWannierMinimize : public CommandMinimize
 {	CommandWannierMinimize() : CommandMinimize("wannier", "wannier") {}

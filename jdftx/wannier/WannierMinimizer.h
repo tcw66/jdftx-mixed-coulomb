@@ -112,8 +112,13 @@ protected:
 	bool checkpointCompatible = true; //!< Rotations and overlaps belong to the loaded SCF wavefunctions
 	string checkpointState; //!< Content fingerprint of the SCF files and basis/mesh
 	void checkCheckpoint(int iSpin);
-	void collectRotationGradient(WannierGradient& grad); //!< propagate accumulated overlap derivatives
+	void collectRotationGradient(WannierGradient& grad, bool initialFrame=false); //!< propagate overlap derivatives; optionally already in the U1 frame
 	virtual bool getCenterConstraints(std::vector<double>& residual, std::vector<WannierGradient>* jacobian=0);
+	virtual bool prepareCenterJacobian(std::vector<double>& residual);
+	virtual std::vector<double> applyCenterJacobian(const WannierGradient& v);
+	virtual WannierGradient applyCenterJacobianAdjoint(const std::vector<double>& v);
+	virtual std::vector<double> centerJacobianScaling();
+	virtual size_t centerJacobianStorage() const;
 	double minimizeFixedCenters(); //!< feasible projected optimization with nonlinear restoration
 	void checkFixedCenterInvariants();
 	int nCenters, nFrozen, nBands; //!< number of Wannier centers (total and frozen) and source bands

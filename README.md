@@ -69,6 +69,7 @@ in the relevant sections.
 | [`wannier-center-vacuum`](#wannier-localization-and-fixed-centers) | `wannier` / `wannier_gpu` |
 | [`wannier-center-constraint`](#wannier-localization-and-fixed-centers) | `wannier` / `wannier_gpu` |
 | [`wannier-center-constraint-tolerance`](#wannier-localization-and-fixed-centers) | `wannier` / `wannier_gpu` |
+| [`wannier-center-constraint-solver`](#wannier-localization-and-fixed-centers) | `wannier` / `wannier_gpu` |
 | [`wannier-koopmans-response`](#wannier-koopmans-response) | `wannier` / `wannier_gpu` |
 | [`wannier-koopmans-screening-mesh`](#wannier-koopmans-screening-mesh) | `wannier` / `wannier_gpu` |
 | [`wannier-koopmans-reference-density`](#wannier-koopmans-reference-density) | `wannier` / `wannier_gpu` |
@@ -184,6 +185,7 @@ trial orbitals separately with `wannier-center`, or include
   cell without ions or pseudopotentials.
 - Atomic projections such as `wannier-center Si 1 px` use that atom's input
   position. Automatically added atomic orbitals also use their atom positions.
+  These positions include JDFTx's usual symmetry adjustment of the input ions.
   Leave `pinAtomicOrbitals no` when using these hard constraints.
 - Numerical trial orbitals use their assigned position. Composite trial
   orbitals use JDFTx's coefficient-squared weighted trial position.
@@ -198,6 +200,32 @@ with no added localization penalty. Projected conjugate gradients and Newton
 restoration preserve orthonormality and inner-window inclusion while keeping
 every accepted state within the requested maximum displacement (default
 `1e-8` bohr). `fdTest yes` checks the objective derivative and center Jacobian.
+The default `MatrixFree` implementation applies the Jacobian and its adjoint
+directly, solving the center normal equations with preconditioned CG instead
+of storing a gradient for every scalar constraint. It caches rectangular
+overlap factors, reduces all center directional derivatives together, and
+checks the true linear-system residual before accepting a solve. The same
+allowed rotations preserve the inner window. For comparison or difficult
+linear solves, select the stored-Jacobian reference implementation with:
+
+```text
+wannier-center-constraint-solver Explicit
+# Default: wannier-center-constraint-solver MatrixFree
+```
+
+The explicit reference also batches its constraint-matrix MPI reduction.
+Matrix-free preconditioning uses positive overlap-based row scaling; it is
+not an exact Jacobian diagonal. A failed normal solve is rejected, and center
+accuracy is still checked independently. The final log reports persistent
+derivative storage per rank and time spent preparing and solving the constraints.
+Those storage figures exclude SCF states, full-band overlaps and temporary work.
+On a 32-center CPU restoration/projection benchmark, storage fell from
+35.48 to 2.26 MiB/rank, and total wall time fell by about 1.8–1.9×, with matched
+objectives and center errors below `5e-13` bohr. This is not a full graphene
+minimization benchmark; performance depends on conditioning and hardware.
+See the [matrix-free validation report](jdftx/test/wannier/MATRIX_FREE_VALIDATION.md)
+for the matched measurements and reproduction commands.
+
 Hard-center runs use their own direction and line search; generic direction
 and line-search choices do not select this algorithm. `maxThreshold` is
 unsupported. Check localization convergence separately from center accuracy.
@@ -211,6 +239,89 @@ Infeasible targets, undefined overlap phases or failed local restoration
 cause an explicit error without relaxing the centers or inner window.
 TruncatedDC constrains the reported phase-based centers, not full
 density-convolution centers.
+
+### How hard center pinning works
+
+For each targeted orbital, let `r0_n` be its fixed trial position and `r_n(W)`
+the center calculated from the current Wannier rotations. The center residual
+is `c_n(W) = r_n(W) - r0_n`, in Cartesian bohr, using the periodic phase branch
+about that target. The optimization minimizes the original spread `Omega(W)`
+subject to these residuals vanishing. It also retains orthonormal Wannier
+columns and exact inclusion of the inner-window states. No center-displacement
+term is added to `Omega`, and the target positions do not follow the centers
+as the optimization proceeds.
+
+The independent variables are the existing allowed `U1`/`U2` rotation
+generators. Their exponential updates preserve orthonormality and inner-window
+inclusion. In this rotation space, define `g` as the localization gradient and
+`J` as the derivative of all targeted center coordinates. `J v` gives the
+first-order center changes for a rotation direction `v`; `J* lambda` gives
+the gradient of a weighted sum of center residuals. Here `J*` is the adjoint
+under JDFTx's Wannier-gradient metric, including the factor of two for the
+off-diagonal subspace-rotation blocks.
+
+The direction used for localization is built from the tangent gradient:
+
+```text
+(J J*) lambda = J g
+g_tangent = g - J* lambda
+```
+
+Thus `J g_tangent` vanishes to the accuracy of the linear solve. In the exact
+linear algebra, this is `g_tangent = [I - J* (J J*)^+ J] g`, where `+` denotes
+the Moore–Penrose pseudoinverse. MatrixFree evaluates the products directly
+and solves iteratively; Explicit constructs the Jacobian and pseudoinverse.
+Previous conjugate-gradient directions are also projected into the current
+tangent space before reuse.
+
+A tangent direction preserves centers only to first order. After a finite
+trial step, damped Newton restoration corrects the nonlinear residual:
+
+```text
+(J J*) mu = c
+delta_rotation = -J* mu
+```
+
+The Jacobian is recomputed at the new state as needed, and corrections are
+damped to reduce the maximum center error. Initial projected trial orbitals
+can already have centers different from their trial positions, so this
+restoration is also performed before localization iteration zero. The line
+search accepts only restored states that meet the center tolerance and its
+spread-decrease condition. Intermediate trial states can violate the center
+constraints; accepted localization states must satisfy them. Restoration uses
+the same allowed rotations and therefore preserves the inner window too.
+
+### Center accuracy and constrained convergence
+
+At a constrained minimum, `g_tangent = 0`. The raw spread gradient `g` may
+remain nonzero: the stationarity condition is `g + J* nu = 0` for suitable
+Lagrange multipliers `nu`. A gradient normal to the feasible manifold is
+balanced by the constraint and does not imply that localization is unfinished.
+
+The iteration output distinguishes these quantities:
+
+- `Omega`: the original localization objective, without a pinning penalty.
+- `|grad|_K`: the norm of the **projected tangent gradient**, normalized by
+  the configured optimization dimension. `knormThreshold` tests this value.
+- `centerError`: the maximum Euclidean displacement of any targeted center,
+  in bohr. It must meet `wannier-center-constraint-tolerance` independently
+  of the localization stopping criteria.
+
+By default, sufficiently small energy changes can terminate localization even
+while the projected gradient is above its threshold. To require gradient-based
+constrained stationarity, replace the existing `wannier-minimize` command with,
+for example:
+
+```text
+wannier-minimize nIterations 1000 \
+    energyDiffThreshold 0 knormThreshold 1e-6
+```
+
+The numerical threshold must be checked for the desired accuracy. Alternatively,
+keep positive energy and gradient thresholds and set `convergeAll yes` to
+require both criteria. Reaching the iteration limit, or satisfying the center
+tolerance alone, does not establish localization convergence. In particular,
+a zero-iteration feasibility/projection test does not find a constrained minimum.
 
 Runnable examples compare direct and Wannier-interpolated bands for
 [aluminum](examples/wannier-aluminum/README.md),
@@ -1693,6 +1804,7 @@ ctest --test-dir build \
   -R '^wannier(TruncatedDC|FixedCenters|FixedAtomicCenters)$' --output-on-failure
 python3 jdftx/test/wannier/checkFixedCenters.py build --suffix _gpu --np 2
 python3 jdftx/test/wannier/checkFixedAtomicCenters.py build --suffix _gpu --np 2
+python3 jdftx/test/wannier/benchmarkFixedCenters.py build --work /tmp/center-benchmark
 ```
 
 These check analytic derivatives, entangled-band localization, fixed Gaussian
@@ -1700,6 +1812,11 @@ and atomic trial positions, automatically added projections, partial Cartesian
 targets, orthonormality and inner-window inclusion. CPU, MPI and two-GPU checks
 passed. Atomic tests require the SG15 Si pseudopotential; the vacuum regression
 requires no pseudopotential.
+The Gaussian regression compares both center solvers, finite differences and
+the Jacobian/adjoint identity. The benchmark uses 32 functions, 96 bands and
+an inner window, checks equivalent feasible states, and reports storage and
+timing without requiring a speedup on every machine. Add `--suffix _gpu --np 2`
+to benchmark two GPUs in an otherwise idle allocation.
 
 Run the Berry-phase regressions with:
 

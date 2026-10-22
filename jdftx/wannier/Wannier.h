@@ -55,6 +55,7 @@ public:
 	bool needAtomicOrbitals;
 	std::map<int, vector3<>> fixedCenters; //!< hard center targets, 0-based total index, lattice coordinates
 	bool fixCenters = false; //!< constrain optimized centers to their original trial-orbital positions
+	bool fixedCenterMatrixFree = true; //!< apply the center Jacobian without storing its rows
 	double fixedCenterTolerance = 1e-8; //!< maximum center displacement, bohr
 	
 	bool addAtomicOrbitals; //!< whether to automatically add atomic orbitals for all atoms

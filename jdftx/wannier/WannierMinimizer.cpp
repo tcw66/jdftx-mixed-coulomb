@@ -120,7 +120,7 @@ double WannierMinimizer::compute(WannierGradient* grad, WannierGradient* Kgrad)
 }
 
 
-void WannierMinimizer::collectRotationGradient(WannierGradient& grad)
+void WannierMinimizer::collectRotationGradient(WannierGradient& grad, bool initialFrame)
 {
 	std::vector<MPIUtil::Request> requests;
 	for(KmeshEntry& ki: kMesh)
@@ -133,10 +133,11 @@ void WannierMinimizer::collectRotationGradient(WannierGradient& grad)
 	grad.init(this);
 	for(size_t ik=ikStart; ik<ikStop; ik++)
 	{	KmeshEntry& ki = kMesh[ik];
-		matrix Omega_B = complex(0,0.5)*(ki.U2(0,ki.nIn, 0,nCenters) * ki.Omega_UdotU * dagger(ki.U2));
+		// Form only the required blocks, not the full nIn x nIn generator.
+		matrix right=initialFrame ? ki.Omega_UdotU : matrix(ki.Omega_UdotU*dagger(ki.U2));
 		if(ki.nIn > nCenters) //Stage 1:
-			grad.B1[ik] = Omega_B(ki.nFixed,nCenters, nCenters,ki.nIn);
-		matrix Omega_B2_hlf = Omega_B(nFrozen,nCenters, nFrozen,nCenters);
+			grad.B1[ik] = complex(0,0.5)*(ki.U2(ki.nFixed,nCenters,0,nCenters)*right(0,nCenters,nCenters,ki.nIn));
+		matrix Omega_B2_hlf = complex(0,0.5)*(ki.U2(nFrozen,nCenters,0,nCenters)*right(0,nCenters,nFrozen,nCenters));
 		grad.B2[ik] = Omega_B2_hlf + dagger(Omega_B2_hlf);
 	}
 }
