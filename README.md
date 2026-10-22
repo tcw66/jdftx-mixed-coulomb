@@ -323,6 +323,24 @@ require both criteria. Reaching the iteration limit, or satisfying the center
 tolerance alone, does not establish localization convergence. In particular,
 a zero-iteration feasibility/projection test does not find a constrained minimum.
 
+The solver also checks tangency of the projected result, rather than relying
+only on a linear residual relative to the raw gradient. It refines the
+projection or reports failure when conditioning prevents an accurate result.
+Failure to transport an old CG direction restarts from the valid current
+projected gradient. The explicit solver equilibrates constraint rows before
+eigenvalue truncation so a sensitive center does not automatically suppress
+weaker independent constraints.
+
+With `fdTest yes`, the code additionally checks the derivative along restored
+feasible steps and prints `rawNorm`, `tangentNorm`, `tangentResidual`,
+`phaseMargin` and `minOverlap`. These diagnostic norms are unnormalized;
+`tangentResidual` is `||J g_tangent||`, and `phaseMargin` is the distance to
+the principal-phase cut in radians. Small diagonal overlaps or phase-cut
+crossings can make discrete phase centers ill-conditioned. A coarse mesh can
+therefore cause a failure even though centers remain within tolerance.
+See the [small-system convergence investigation](jdftx/test/wannier/CONVERGENCE_DEBUG.md)
+for convergent tests, remaining difficult cases and a reproducer.
+
 Runnable examples compare direct and Wannier-interpolated bands for
 [aluminum](examples/wannier-aluminum/README.md),
 [graphene](examples/wannier-graphene/README.md), and

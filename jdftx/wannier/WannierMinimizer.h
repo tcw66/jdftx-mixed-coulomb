@@ -119,6 +119,8 @@ protected:
 	virtual WannierGradient applyCenterJacobianAdjoint(const std::vector<double>& v);
 	virtual std::vector<double> centerJacobianScaling();
 	virtual size_t centerJacobianStorage() const;
+	bool centerDiagnostics=false; //!< enable phase-conditioning checks with fdTest
+	double centerPhaseMargin=0.,centerOverlapMinimum=0.;
 	double minimizeFixedCenters(); //!< feasible projected optimization with nonlinear restoration
 	void checkFixedCenterInvariants();
 	int nCenters, nFrozen, nBands; //!< number of Wannier centers (total and frozen) and source bands

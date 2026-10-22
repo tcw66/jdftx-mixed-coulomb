@@ -46,13 +46,17 @@ for measure,partial,solver in [(m,p,s) for m,p in [('FiniteDifference',False),('
     text+=''.join('wannier-center-vacuum Gaussian '+' '.join(map(str,row))+' 1\n' for row in (6*trials if partial else trials))
     if partial:text+=''.join(f'wannier-center-constraint {i} '+' '.join(map(str,target_cart[i]))+'\n' for i in selected)
     text+=f'wannier-center-constraint-solver {solver}\n'
-    text+='wannier-minimize nIterations 50 energyDiffThreshold 1e-8 knormThreshold 1e-7 fdTest yes\n'
+    text+='wannier-minimize nIterations 500 energyDiffThreshold 0 knormThreshold 1e-6 fdTest yes\n'
     (root/(name+'.in')).write_text(text)
     out=run('wannier',name)
     centers=np.loadtxt(root/(name+'.mlwfCenters'),ndmin=2)
     error=np.max(np.linalg.norm(centers[list(selected),:3]-target_cart[list(selected)],axis=1))
     assert error<1e-8,(name,error)
     assert 'fdTest center Jacobian error' in out
+    assert 'fdTest feasible derivative error' in out
+    assert 'WannierMinimize: Converged' in out,out[-4000:]
+    gradients=[float(x) for x in re.findall(r'\|grad\|_K:\s*(\S+)',out)]
+    assert gradients[-1]<1e-6,gradients[-1]
     assert 'inner-window inclusion error' in out
     # Independently inspect the exported rectangular rotations. In vacuum the
     # source eigenvalues are the sorted |k+G|^2/2, so frozen-band rows are known.

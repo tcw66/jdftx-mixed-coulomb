@@ -48,6 +48,28 @@ bool WannierMinimizerFD::prepareCenterJacobian(std::vector<double>& residual)
         for(size_t p=0;p<centerLeft.size();p++) for(size_t ic=0;ic<nc;ic++)
             centerZ[p*nc+ic]=rho[(p%nb)*nc+ic];
     }
+    if(centerDiagnostics)
+    {
+        double margin=M_PI,minOverlap=1.;size_t p=0;
+        for(size_t ik=ikStart;ik<ikStop;ik++) for(size_t ib=0;ib<nb;ib++,p++)
+        {
+            size_t ic=0;
+            for(const auto& target:wannier.fixedCenters)
+            {
+                const complex z=centerZ[p*nc+ic++];
+                margin=std::min(margin,M_PI-std::abs((z*cis(dot(rPinned[target.first],edges[ik][ib].b))).arg()));
+                minOverlap=std::min(minOverlap,std::sqrt(z.norm()));
+            }
+        }
+        mpiWorld->allReduce(margin,MPIUtil::ReduceMin);
+        mpiWorld->allReduce(minOverlap,MPIUtil::ReduceMin);
+        centerPhaseMargin=margin;centerOverlapMinimum=minOverlap;
+        if(!centerPhaseWarning && (margin<1e-5 || minOverlap<1e-8))
+        {
+            logPrintf("FixedCenters: nonsmooth-center diagnostic: phase-cut margin %.3le rad; minimum overlap %.3le.\n",margin,minOverlap);
+            logFlush();centerPhaseWarning=true;
+        }
+    }
     // Cheap overlap-based row equilibration, not a stored Jacobian diagonal.
     centerScaling.assign(3*nc,0.);pos=0;
     for(size_t ik=ikStart;ik<ikStop;ik++) for(size_t ib=0;ib<nb;ib++,pos++)

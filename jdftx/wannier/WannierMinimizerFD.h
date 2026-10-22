@@ -56,6 +56,7 @@ private:
 	std::vector<matrix> centerLeft, centerRight; //!< rectangular overlap factors for one linearization
 	std::vector<complex> centerZ; //!< individual (MV) or averaged (TDC) diagonal overlaps
 	std::vector<double> centerScaling; //!< positive row scaling for the iterative normal solve
+	bool centerPhaseWarning=false;
 };
 
 //! @}

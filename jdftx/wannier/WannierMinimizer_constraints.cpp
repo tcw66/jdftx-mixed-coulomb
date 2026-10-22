@@ -26,7 +26,7 @@ double localGradientDot(const WannierGradient& x,const WannierGradient& y)
     return value;
 }
 
-// Moore-Penrose inverse permits redundant constraints. Feasibility is checked
+// Pseudoinverse in equilibrated center coordinates permits redundant constraints. Feasibility is checked
 // independently against ALL residuals, so a null-space residual is never ignored.
 matrix gramInverse(const std::vector<WannierGradient>& J)
 {
@@ -40,11 +40,16 @@ matrix gramInverse(const std::vector<WannierGradient>& J)
         double value=packed[pos++];
         G.data()[G.index(i,j)]=value; G.data()[G.index(j,i)]=value;
     }
+    // Equilibrate center rows before truncating eigenvalues. Otherwise one
+    // sensitive center can cause independent, weaker constraints to be lost.
+    diagMatrix scale(n);
+    for(int i=0;i<n;i++) scale[i]=1./std::sqrt(std::max(1e-20,G.data()[G.index(i,i)].real()));
+    G=scale*G*scale;
     matrix V; diagMatrix eig;
     G.diagonalize(V,eig);
     double largest=eig.empty()?0.:eig.back();
     for(double& x:eig) x=(x>std::max(1e-20,largest*1e-10)) ? 1./x : 0.;
-    return V*eig*dagger(V);
+    return scale*(V*eig*dagger(V))*scale;
 }
 
 std::vector<double> applyConstraintMatrix(const matrix& A,const std::vector<double>& b)
@@ -94,8 +99,10 @@ void WannierMinimizer::checkFixedCenterInvariants()
 double WannierMinimizer::minimizeFixedCenters()
 {
     const MinimizeParams& p=wannier.minParams;
+    centerDiagnostics=p.fdTest;
     if(p.maxThreshold) die("Hard-center optimization supports knormThreshold, but not maxThreshold.\n");
     const double tolerance=wannier.fixedCenterTolerance;
+    double restorationTolerance=tolerance;
     typedef std::vector<std::pair<matrix,matrix>> State;
     auto save=[&]() {
         State state;
@@ -127,6 +134,11 @@ double WannierMinimizer::minimizeFixedCenters()
         {
             if(!getCenterConstraints(c,&rows)) return false;
             Gi=gramInverse(rows);bytes=Gi.nRows()*Gi.nCols()*sizeof(complex);
+            if(p.fdTest)
+            {
+                if(!prepareCenterJacobian(c)) return false;
+                bytes+=centerJacobianStorage();
+            }
             for(const auto& row:rows) for(size_t ik=ikStart;ik<ikStop;ik++)
                 bytes+=(row.B1[ik].nRows()*row.B1[ik].nCols()+row.B2[ik].nRows()*row.B2[ik].nCols())*sizeof(complex);
         }
@@ -173,7 +185,7 @@ double WannierMinimizer::minimizeFixedCenters()
                 logPrintf("FixedCenters: normal CG iteration %lu residual %.3le (target %.3le).\n",iter+1,std::sqrt(scalarDot(r,r)),target);
                 logFlush();
             }
-            if(std::sqrt(scalarDot(r,r))<=target || iter%32==31)
+            if(std::sqrt(scalarDot(r,r))<=target)
             {
                 auto Ax=applyCenterJacobian(adjoint(x));normalProducts++;
                 for(size_t i=0;i<m;i++) r[i]=b[i]-Ax[i];
@@ -193,7 +205,23 @@ double WannierMinimizer::minimizeFixedCenters()
     auto project=[&](const WannierGradient& v,WannierGradient& result) {
         WannierGradient correction;
         if(!normal(Jv(v),correction)) return false;
-        result=v;axpy(-1.,correction,result);return true;
+        result=v;axpy(-1.,correction,result);
+        // A small residual relative to J*v can still leave a large normal
+        // component when the raw gradient/Jacobian is large. Check tangency
+        // of the RESULT, and refine rather than reporting a false projection.
+        for(int refine=0;refine<4;refine++)
+        {
+            const auto drift=Jv(result);
+            const double target=1e-8*std::max(1.,std::sqrt(dot(result,result)));
+            if(std::sqrt(scalarDot(drift,drift))<=target) return true;
+            if(!normal(drift,correction)) return false;
+            axpy(-1.,correction,result);
+        }
+        const auto drift=Jv(result);
+        const double target=1e-8*std::max(1.,std::sqrt(dot(result,result)));
+        if(std::sqrt(scalarDot(drift,drift))<=target) return true;
+        logPrintf("FixedCenters: projection is ill-conditioned: tangent residual %.3le exceeds %.3le.\n",std::sqrt(scalarDot(drift,drift)),target);
+        return false;
     };
     // Damped Newton restoration in the minimum-norm normal direction.
     auto feasible=[&](bool verbose) {
@@ -203,7 +231,7 @@ double WannierMinimizer::minimizeFixedCenters()
             if(!getCenterConstraints(c)) return false;
             const double error=centerError(c);
             if(verbose) logPrintf("FixedCenters: restore %d residual %.12le bohr\n",iter,error);
-            if(error<=tolerance) return true;
+            if(error<=restorationTolerance) return true;
             if(!prepare(c)) return false;
             if(verbose) { logPrintf("FixedCenters: center linearization ready.\n");logFlush(); }
             WannierGradient correction;
@@ -260,6 +288,41 @@ double WannierMinimizer::minimizeFixedCenters()
         if(err>1e-6 || objError>1e-5) die("Fixed-center derivative check failed.\n");
     }
     if(!feasible(true)) die("Cannot satisfy fixed-center targets within the allowed inner/outer-window subspace. Targets may be infeasible, locally singular, or need better trial orbitals.\n");
+    if(p.fdTest)
+    {
+        // Test the derivative of the actual feasible search curve, not only
+        // the unconstrained rotation derivative. Use tighter restoration so
+        // fixed feasibility noise does not dominate a small difference step.
+        restorationTolerance=std::min(tolerance,1e-12);
+        if(!feasible(false)) die("Cannot restore centers for feasible derivative check.\n");
+        WannierGradient raw;compute(&raw,0);std::vector<double> c;
+        if(!prepare(c)) die("Cannot prepare feasible derivative check.\n");
+        WannierGradient dx=raw;randomize(dx);constrain(dx);
+        WannierGradient tangent;
+        if(!project(dx,tangent)) die("Cannot project feasible derivative check.\n");
+        const double norm=std::sqrt(dot(tangent,tangent));
+        if(norm>1e-12)
+        {
+            tangent*=1./norm;
+            const auto drift=Jv(tangent);double driftNorm=std::sqrt(scalarDot(drift,drift));
+            if(driftNorm>1e-7) die("Projected direction is not tangent to the center constraints.\n");
+            const double expected=dot(raw,tangent);State start=save();double error=0.;
+            for(double h:{1e-3,5e-4})
+            {
+                restore(start);step(tangent,h);
+                if(!feasible(false)) die("Cannot restore positive feasible derivative step.\n");
+                const double plus=getOmega();
+                restore(start);step(tangent,-h);
+                if(!feasible(false)) die("Cannot restore negative feasible derivative step.\n");
+                const double minus=getOmega();
+                error=std::abs((plus-minus)/(2*h)-expected);
+            }
+            restore(start);
+            logPrintf("FixedCenters: fdTest feasible derivative error %.3le; tangent residual %.3le\n",error,driftNorm);
+            if(error>5e-5*std::max(1.,std::abs(expected))) die("Feasible localization derivative check failed.\n");
+        }
+        restorationTolerance=tolerance;
+    }
     WannierGradient prevG,prevD;
     bool havePrevious=false;
     double E=getOmega(),previous=E,alpha=std::max(1e-4,p.alphaTstart);
@@ -272,6 +335,11 @@ double WannierMinimizer::minimizeFixedCenters()
         WannierGradient g;
         if(!project(raw,g)) die("Fixed-center normal solve failed to converge. Try Explicit solver or improve the trial subspace.\n");
         const double gSq=dot(g,g),gNorm=std::sqrt(gSq/std::max(size_t(1),p.nDim));
+        if(p.fdTest)
+        {
+            const auto drift=Jv(g);
+            logPrintf("FixedCenters: stationarity rawNorm %.6le; tangentNorm %.6le; tangentResidual %.6le; phaseMargin %.6le; minOverlap %.6le\n",std::sqrt(dot(raw,raw)),std::sqrt(gSq),std::sqrt(scalarDot(drift,drift)),centerPhaseMargin,centerOverlapMinimum);
+        }
         logPrintf("%sIter: %3d  Omega: %22.15le  |grad|_K: %.3le  centerError: %.3le  t[s]: %.2lf\n",p.linePrefix,iter,E,gNorm,centerError(c),clock_sec());logFlush();
         if(acceptedLast && p.energyDiffThreshold>0. && std::abs(E-previous)<p.energyDiffThreshold) smallChanges++;else smallChanges=0;
         acceptedLast=false;
@@ -286,13 +354,21 @@ double WannierMinimizer::minimizeFixedCenters()
             WannierGradient diff=g;axpy(-1.,prevG,diff);
             double beta=std::max(0.,dot(g,diff)/std::max(1e-30,dot(prevG,prevG)));
             WannierGradient transported;
-            if(!project(prevD,transported)) die("Fixed-center direction projection failed.\n");
-            axpy(beta,transported,d);
+            if(project(prevD,transported)) axpy(beta,transported,d);
+            else
+            {
+                // Transport is optional acceleration. A failed normal solve
+                // must not abort a valid current projected-gradient step.
+                logPrintf("FixedCenters: restarting CG after direction-transport solve failure.\n");
+                havePrevious=false;
+            }
         }
         double slope=dot(g,d);
         if(slope>=-1e-3*gSq) {d=g;d*=-1.;slope=-gSq;}
         State start=save();bool accepted=false;
-        double trialAlpha=std::min(3.,alpha*1.5);
+        // Let backtracking determine the scale. A hard cap of three stalls
+        // soft localization modes even when much larger steps decrease Omega.
+        double trialAlpha=alpha*1.5;
         for(int trial=0;trial<20;trial++,trialAlpha*=.5)
         {
             restore(start);step(d,trialAlpha);
