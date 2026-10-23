@@ -73,12 +73,8 @@ void WannierMinimizer::step(const WannierGradient& grad, double alpha)
 	{	KmeshEntry& ki = kMesh[ik];
 		//Stage 1:
 		if(ki.nIn > nCenters)
-		{	int nFreeIn = ki.nIn - ki.nFixed;
-			int nFree = nCenters - ki.nFixed;
-			matrix B1 = zeroes(nFreeIn, nFreeIn);
-			B1.set(0,nFree, nFree,nFreeIn, alpha*grad.B1[ik]);
-			B1.set(nFree,nFreeIn, 0,nFree, alpha*dagger(grad.B1[ik]));
-			ki.U1.set(0,nBands, ki.nFixed,ki.nIn, ki.U1(0,nBands, ki.nFixed,ki.nIn) * cis(B1));
+		{	ki.U1.set(0,nBands,ki.nFixed,ki.nIn,
+                rightMultiplyOffDiagonalExp(ki.U1(0,nBands,ki.nFixed,ki.nIn),grad.B1[ik],alpha));
 		}
 		//Stage 2:
 		ki.U2.set(nFrozen,nCenters, nFrozen,nCenters, cis(alpha*grad.B2[ik]) * ki.U2(nFrozen,nCenters, nFrozen,nCenters));

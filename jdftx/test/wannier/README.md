@@ -70,3 +70,9 @@ localization benchmark of restoration and tangent projection, not convergence
 of a full minimization. Reported storage excludes source states, full-band
 overlaps and transient work. GPU timings require an idle allocation for a
 meaningful comparison; no speedup is asserted by the script.
+
+`checkStructuredUpdates` and `checkStructuredUpdates_gpu` independently validate
+structured outer-window exponentials and complex column contractions against
+dense matrix references, including rank-deficient cases. See
+[performance validation](PERFORMANCE_VALIDATION.md) for retained optimizations,
+timings, accuracy checks, and the rejected projected L-BFGS candidate.

@@ -161,3 +161,17 @@ void zeroUpperTriangular_gpu(int N, complex* data)
 	gpuErrorCheck();
 }
 
+
+__global__ void columnDot_kernel(int rows, int cols, const complex* X, const complex* Y, complex* out)
+{
+    int col=kernelIndex1D(); if(col>=cols) return;
+    complex value(0.,0.);
+    for(int row=0; row<rows; row++) value+=X[col*rows+row].conj()*Y[col*rows+row];
+    out[col]=value;
+}
+void columnDot_gpu(int rows, int cols, const complex* X, const complex* Y, complex* out)
+{
+    GpuLaunchConfig1D glc(columnDot_kernel,cols);
+    columnDot_kernel<<<glc.nBlocks,glc.nPerBlock>>>(rows,cols,X,Y,out);
+    gpuErrorCheck();
+}

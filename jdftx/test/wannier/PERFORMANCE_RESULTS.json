@@ -1,0 +1,132 @@
+{
+  "before": {
+    "FiniteDifference-Explicit": {
+      "derivative_MiB_per_rank": 35.484375,
+      "prepare_seconds": 0.839967,
+      "normal_seconds": 0.007933,
+      "wall_seconds": 1.3922131180006545,
+      "objective": 186.5995210411574,
+      "center_error_bohr": 4.673878067234987e-13
+    },
+    "FiniteDifference-MatrixFree": {
+      "derivative_MiB_per_rank": 2.262451,
+      "prepare_seconds": 0.058294,
+      "normal_seconds": 0.113289,
+      "wall_seconds": 0.7233957530115731,
+      "objective": 186.5995210411573,
+      "center_error_bohr": 4.676754894608899e-13
+    },
+    "TruncatedDC-Explicit": {
+      "derivative_MiB_per_rank": 35.484375,
+      "prepare_seconds": 0.835518,
+      "normal_seconds": 0.007768,
+      "wall_seconds": 1.3899816589837428,
+      "objective": 193.2786893077109,
+      "center_error_bohr": 4.655563222136435e-13
+    },
+    "TruncatedDC-MatrixFree": {
+      "derivative_MiB_per_rank": 2.262451,
+      "prepare_seconds": 0.05538,
+      "normal_seconds": 0.112638,
+      "wall_seconds": 0.6905856420053169,
+      "objective": 193.2786893077104,
+      "center_error_bohr": 4.662490478154255e-13
+    }
+  },
+  "after": {
+    "FiniteDifference-Explicit": {
+      "derivative_MiB_per_rank": 35.484375,
+      "prepare_seconds": 0.930201,
+      "normal_seconds": 0.008147,
+      "wall_seconds": 1.434126815001946,
+      "objective": 186.5995210411583,
+      "center_error_bohr": 4.671189459607582e-13
+    },
+    "FiniteDifference-MatrixFree": {
+      "derivative_MiB_per_rank": 2.262451,
+      "prepare_seconds": 0.055333,
+      "normal_seconds": 0.054733,
+      "wall_seconds": 0.629783631011378,
+      "objective": 186.5995210411585,
+      "center_error_bohr": 4.52640854502669e-13
+    },
+    "TruncatedDC-Explicit": {
+      "derivative_MiB_per_rank": 35.484375,
+      "prepare_seconds": 0.831004,
+      "normal_seconds": 0.007957,
+      "wall_seconds": 1.3694135989935603,
+      "objective": 193.2786893077107,
+      "center_error_bohr": 4.659824925934947e-13
+    },
+    "TruncatedDC-MatrixFree": {
+      "derivative_MiB_per_rank": 2.262451,
+      "prepare_seconds": 0.056174,
+      "normal_seconds": 0.055166,
+      "wall_seconds": 0.61099176199059,
+      "objective": 193.2786893077109,
+      "center_error_bohr": 4.514159718809276e-13
+    }
+  },
+  "scope": "32-orbital/96-band, 2x2x2 vacuum mesh; zero localization iterations: restoration/projection benchmark, not minimization convergence.",
+  "graphene_two_step_restart": {
+    "before": {
+      "iterations": [
+        {
+          "iteration": 0,
+          "objective": 293.2870974010337,
+          "gradient": 0.3901,
+          "center_error": 4.014e-13,
+          "elapsed": 103.37
+        },
+        {
+          "iteration": 1,
+          "objective": 293.2868747313713,
+          "gradient": 0.3715,
+          "center_error": 5.176e-10,
+          "elapsed": 153.71
+        },
+        {
+          "iteration": 2,
+          "objective": 293.2865746247031,
+          "gradient": 0.3474,
+          "center_error": 1.481e-09,
+          "elapsed": 222.09
+        }
+      ],
+      "optimization_seconds": 118.72,
+      "normal_seconds": 66.275187,
+      "normal_products": 254,
+      "final_center_error": 1.481443876395e-09
+    },
+    "after-cg": {
+      "iterations": [
+        {
+          "iteration": 0,
+          "objective": 293.2870974010337,
+          "gradient": 0.3901,
+          "center_error": 4.014e-13,
+          "elapsed": 92.06
+        },
+        {
+          "iteration": 1,
+          "objective": 293.2868747313752,
+          "gradient": 0.3715,
+          "center_error": 5.176e-10,
+          "elapsed": 129.87
+        },
+        {
+          "iteration": 2,
+          "objective": 293.2865746247165,
+          "gradient": 0.3474,
+          "center_error": 1.481e-09,
+          "elapsed": 174.96
+        }
+      ],
+      "optimization_seconds": 82.9,
+      "normal_seconds": 27.932432,
+      "normal_products": 288,
+      "final_center_error": 1.481447278462e-09
+    },
+    "maximum_exported_center_difference_bohr": 6.864473619524991e-14
+  }
+}

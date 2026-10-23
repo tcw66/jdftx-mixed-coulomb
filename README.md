@@ -272,7 +272,9 @@ linear algebra, this is `g_tangent = [I - J* (J J*)^+ J] g`, where `+` denotes
 the Moore–Penrose pseudoinverse. MatrixFree evaluates the products directly
 and solves iteratively; Explicit constructs the Jacobian and pseudoinverse.
 Previous conjugate-gradient directions are also projected into the current
-tangent space before reuse.
+tangent space before reuse. The matrix-free normal solve recycles up to eight
+positive-curvature secant pairs in its preconditioner, with a diagonal-PCG
+fallback and the same true-residual acceptance checks.
 
 A tangent direction preserves centers only to first order. After a finite
 trial step, damped Newton restoration corrects the nonlinear residual:
@@ -290,6 +292,58 @@ search accepts only restored states that meet the center tolerance and its
 spread-decrease condition. Intermediate trial states can violate the center
 constraints; accepted localization states must satisfy them. Restoration uses
 the same allowed rotations and therefore preserves the inner window too.
+
+### Fixed-center performance
+
+The following optimizations are enabled automatically for existing inputs:
+
+- **Structured orbital updates:** apply the off-diagonal rotation exponential
+  through a smaller Gram eigensystem instead of constructing the full
+  outer-window exponential. Analytic limits handle zero and rank-deficient
+  generators; very large rotation angles fall back to the original dense
+  exponential to avoid amplifying roundoff.
+- **Diagonal-only Jacobian contractions:** compute the complex column inner
+  products needed for center derivatives, rather than full matrix products
+  whose off-diagonal entries are discarded. CPU and CUDA implementations use
+  the same double-precision expressions.
+- **Recycled constraint preconditioning:** the matrix-free normal solver reuses
+  up to eight positive-curvature secant pairs. The preconditioner stays fixed
+  within each PCG solve; a failed recycled solve retries the original diagonal
+  preconditioner. True-residual and tangent-projection checks still apply.
+- **Reduced communication:** omit a trial-state restore broadcast when the
+  immediately following orbital update already broadcasts the new rotations.
+  Standalone restores still communicate normally.
+
+These changes retain the original localization functional, fixed-center
+constraint, center tolerance, projected-gradient stopping criterion,
+orthonormality, and frozen inner-window requirements. No new input setting is
+needed. Structured orbital updates also apply to unconstrained Wannierization;
+the Jacobian and constraint-solver changes apply to matrix-free hard centers
+for both MV (`FiniteDifference`) and `TruncatedDC`.
+
+A two-step CPU restart of the 60-orbital graphene example reduced optimization
+time from **118.72 to 82.90 seconds** (about 1.43× faster), excluding startup
+and final output. The final objectives differed by about 1.4e-11, and maximum
+center residuals were about 1.5e-9 bohr in both runs, below the requested
+1e-8 bohr tolerance. This is a short trajectory comparison, not a full graphene
+convergence benchmark. Small-system full minimizations and CPU/GPU derivative,
+center, orthonormality, and inner-window checks also passed. Performance depends
+on the problem; recycling does not always reduce normal-operator products.
+
+A projected L-BFGS implementation was tested and reverted: its extra history
+transport projections reduced iteration counts but increased matrix-free CPU
+runtime on the regression problem. Fixed-center optimization continues to use
+projected Polak–Ribiere CG; generic `dirUpdateScheme` and `history` settings do
+not change it.
+
+Final diagnostics report orbital-update time (including its communication),
+objective/gradient time, restore communication, line-search trials, Newton
+restoration corrections, derivative preparation, and normal-solver products/time.
+Timings are maximum-rank elapsed values; different phase maxima need not add to
+total wall time. See [performance validation](jdftx/test/wannier/PERFORMANCE_VALIDATION.md)
+for numerical tests and reproduction commands, and
+[machine-readable measurements](jdftx/test/wannier/PERFORMANCE_RESULTS.json)
+for the benchmark results.
 
 ### Center accuracy and constrained convergence
 

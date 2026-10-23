@@ -427,3 +427,23 @@ matrix operator*(const matrix& m, const tiledBlockMatrix& tbm)
 	}
 	return result;
 }
+
+void columnDot_thread(int first, int last, int rows, const complex* X, const complex* Y, complex* out)
+{
+    for(int col=first; col<last; col++) {
+        complex value(0.,0.);
+        for(int row=0; row<rows; row++) value+=X[col*rows+row].conj()*Y[col*rows+row];
+        out[col]=value;
+    }
+}
+void columnDot(int rows, int cols, const complex* X, const complex* Y, complex* out)
+{ threadLaunch(columnDot_thread, cols, rows, X, Y, out); }
+void columnDot_gpu(int rows, int cols, const complex* X, const complex* Y, complex* out);
+matrix columnDot(const matrix& X, const matrix& Y)
+{
+    static StopWatch watch("columnDot"); watch.start();
+    assert(X.nRows()==Y.nRows() && X.nCols()==Y.nCols());
+    matrix result(1,X.nCols(),isGpuEnabled());
+    callPref(columnDot)(X.nRows(),X.nCols(),X.dataPref(),Y.dataPref(),result.dataPref());
+    watch.stop(); return result;
+}

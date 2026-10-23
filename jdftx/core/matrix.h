@@ -193,6 +193,11 @@ double dot(const matrix& x, const matrix& y);
 void randomize(diagMatrix& x);
 void randomize(matrix& x);
 
+//! Complex column inner products, without constructing off-diagonal products.
+matrix columnDot(const matrix& X, const matrix& Y);
+//! Apply exp(i alpha [0 B; B^dagger 0]) on the right using the smaller Gram matrix.
+matrix rightMultiplyOffDiagonalExp(const matrix& A, const matrix& B, double alpha);
+
 diagMatrix diagDot(const matrix& X, const matrix& Y); //!< Compute diag(dagger(X)*Y) efficiently (avoid the off-diagonals)
 
 //------- Nonlinear matrix functions and their gradients ---------

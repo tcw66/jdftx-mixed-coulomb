@@ -126,12 +126,14 @@ std::vector<double> WannierMinimizerFD::applyCenterJacobian(const WannierGradien
     for(size_t ik=ikStart;ik<ikStop;ik++) for(size_t ib=0;ib<nb;ib++,pos++)
     {
         const auto& edge=edges[ik][ib];
-        const matrix dM=complex(0.,1.)*(centerRight[pos]*A[edge.ik]-dagger(A[ik])*centerLeft[pos]);
+        const matrix dFirst=columnDot(dagger(centerRight[pos]),A[edge.ik]);
+        const matrix dSecond=columnDot(A[ik],centerLeft[pos]);
+        const complex* first=dFirst.data(); const complex* second=dSecond.data();
         size_t ic=0;
         for(const auto& target:wannier.fixedCenters)
         {
             int n=target.first;
-            const double phaseDerivative=(dM.data()[dM.index(n,n)]/centerZ[pos*nc+ic]).imag();
+            const double phaseDerivative=((first[n]-second[n])/centerZ[pos*nc+ic]).real();
             for(int d=0;d<3;d++) result[3*ic+d]-=kMesh[ik].point.weight*edge.wb*edge.b[d]*phaseDerivative;
             ic++;
         }

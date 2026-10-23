@@ -5,6 +5,7 @@
 #include <wannier/WannierMinimizer.h>
 #include <algorithm>
 #include <cmath>
+#include <deque>
 
 namespace {
 double centerError(const std::vector<double>& c)
@@ -103,19 +104,30 @@ double WannierMinimizer::minimizeFixedCenters()
     if(p.maxThreshold) die("Hard-center optimization supports knormThreshold, but not maxThreshold.\n");
     const double tolerance=wannier.fixedCenterTolerance;
     double restorationTolerance=tolerance;
+    double updateSeconds=0.,objectiveSeconds=0.,restoreCommunicationSeconds=0.;
+    size_t restorationCount=0;
+    auto timedStep=[&](const WannierGradient& direction,double alpha) {
+        const double start=clock_sec(); step(direction,alpha); updateSeconds+=clock_sec()-start;
+    };
+    auto timedOmega=[&]() {
+        const double start=clock_sec();double E=getOmega();objectiveSeconds+=clock_sec()-start;return E;
+    };
+    auto timedCompute=[&](WannierGradient& grad) {
+        const double start=clock_sec();double E=compute(&grad,0);objectiveSeconds+=clock_sec()-start;return E;
+    };
     typedef std::vector<std::pair<matrix,matrix>> State;
     auto save=[&]() {
         State state;
         for(size_t ik=ikStart;ik<ikStop;ik++) state.emplace_back(kMesh[ik].U1,kMesh[ik].U2);
         return state;
     };
-    auto restore=[&](const State& state) {
+    auto restore=[&](const State& state,bool communicate=true) {
         for(size_t ik=ikStart;ik<ikStop;ik++)
         {
             auto& ki=kMesh[ik];
             ki.U1=state[ik-ikStart].first;ki.U2=state[ik-ikStart].second;ki.U=ki.U1*ki.U2;
         }
-        bcastU();
+        if(communicate) {const double start=clock_sec();bcastU();restoreCommunicationSeconds+=clock_sec()-start;}
     };
     // One linearization is shared by normal correction and tangent projection.
     // Explicit remains available as a reference; MatrixFree never stores J rows.
@@ -160,14 +172,33 @@ double WannierMinimizer::minimizeFixedCenters()
     auto scalarDot=[](const std::vector<double>& x,const std::vector<double>& y) {
         double a=0.;for(size_t i=0;i<x.size();i++) a+=x[i]*y[i];return a;
     };
+    // Recycled positive-curvature secants approximate the inverse normal operator.
+    // They are frozen within each PCG solve, keeping its preconditioner linear/SPD.
+    std::deque<std::pair<std::vector<double>,std::vector<double>>> normalHistory;
     auto normal=[&](const std::vector<double>& b,WannierGradient& correction) {
         normalSolves++;const double start=clock_sec();
         if(!matrixFree) { correction=adjoint(applyConstraintMatrix(Gi,b));solveSeconds+=clock_sec()-start;return true; }
         const size_t m=b.size();
         const auto scale=centerJacobianScaling();
         std::vector<double> x(m,0.),r=b,z(m),d(m);
+        std::deque<std::pair<std::vector<double>,std::vector<double>>> newHistory;
+        auto preconditionNormal=[&](const std::vector<double>& input) {
+            std::vector<double> result=input,alpha(normalHistory.size());
+            for(int j=int(normalHistory.size())-1;j>=0;j--) {
+                const auto& pair=normalHistory[j];
+                alpha[j]=scalarDot(pair.first,result)/scalarDot(pair.first,pair.second);
+                for(size_t i=0;i<m;i++) result[i]-=alpha[j]*pair.second[i];
+            }
+            for(size_t i=0;i<m;i++) result[i]/=scale[i];
+            for(size_t j=0;j<normalHistory.size();j++) {
+                const auto& pair=normalHistory[j];
+                double beta=scalarDot(pair.second,result)/scalarDot(pair.first,pair.second);
+                for(size_t i=0;i<m;i++) result[i]+=(alpha[j]-beta)*pair.first[i];
+            }
+            return result;
+        };
         const double target=std::max(1e-13,1e-9*std::sqrt(scalarDot(b,b)));
-        for(size_t i=0;i<m;i++) z[i]=r[i]/scale[i];
+        z=preconditionNormal(r);
         d=z;double rz=scalarDot(r,z);
         bool solved=std::sqrt(scalarDot(r,r))<=target;
         // PCG on the positive-semidefinite normal operator, starting at zero.
@@ -178,6 +209,10 @@ double WannierMinimizer::minimizeFixedCenters()
             auto Ad=applyCenterJacobian(adjoint(d));normalProducts++;
             const double curvature=scalarDot(d,Ad);
             if(!std::isfinite(curvature) || curvature<=0. || !std::isfinite(rz)) break;
+            if(curvature>1e-12*std::sqrt(scalarDot(d,d)*scalarDot(Ad,Ad))) {
+                newHistory.emplace_back(d,Ad);
+                if(newHistory.size()>8) newHistory.pop_front();
+            }
             const double alpha=rz/curvature;
             for(size_t i=0;i<m;i++) {x[i]+=alpha*d[i];r[i]-=alpha*Ad[i];}
             if(iter%100==99)
@@ -191,15 +226,38 @@ double WannierMinimizer::minimizeFixedCenters()
                 for(size_t i=0;i<m;i++) r[i]=b[i]-Ax[i];
                 solved=std::sqrt(scalarDot(r,r))<=target;
                 if(solved) break;
-                for(size_t i=0;i<m;i++) z[i]=r[i]/scale[i];
+                z=preconditionNormal(r);
                 d=z;rz=scalarDot(r,z);continue;
             }
-            for(size_t i=0;i<m;i++) z[i]=r[i]/scale[i];
+            z=preconditionNormal(r);
             const double next=scalarDot(r,z),beta=next/rz;
             for(size_t i=0;i<m;i++) d[i]=z[i]+beta*d[i];
             rz=next;
         }
+        if(!solved && !normalHistory.empty()) {
+            // Revert to the original diagonal PCG if recycling is unhelpful.
+            normalHistory.clear();newHistory.clear();
+            std::fill(x.begin(),x.end(),0.); r=b;z=preconditionNormal(r);d=z;rz=scalarDot(r,z);
+            for(size_t iter=0;!solved && iter<4*m+40;iter++) {
+                auto Ad=applyCenterJacobian(adjoint(d));normalProducts++;
+                const double curvature=scalarDot(d,Ad);
+                if(!std::isfinite(curvature) || curvature<=0. || !std::isfinite(rz)) break;
+                const double alpha=rz/curvature;
+                for(size_t i=0;i<m;i++) {x[i]+=alpha*d[i];r[i]-=alpha*Ad[i];}
+                if(std::sqrt(scalarDot(r,r))<=target) {
+                    auto Ax=applyCenterJacobian(adjoint(x));normalProducts++;
+                    for(size_t i=0;i<m;i++) r[i]=b[i]-Ax[i];
+                    solved=std::sqrt(scalarDot(r,r))<=target;
+                    if(solved) break;
+                    z=preconditionNormal(r);d=z;rz=scalarDot(r,z);continue;
+                }
+                z=preconditionNormal(r);const double next=scalarDot(r,z), beta=next/rz;
+                for(size_t i=0;i<m;i++) d[i]=z[i]+beta*d[i];
+                rz=next;
+            }
+        }
         if(!solved) { solveSeconds+=clock_sec()-start;return false; }
+        for(auto& pair:newHistory) {normalHistory.push_back(std::move(pair));if(normalHistory.size()>8) normalHistory.pop_front();}
         correction=adjoint(x);solveSeconds+=clock_sec()-start;return true;
     };
     auto project=[&](const WannierGradient& v,WannierGradient& result) {
@@ -232,6 +290,7 @@ double WannierMinimizer::minimizeFixedCenters()
             const double error=centerError(c);
             if(verbose) logPrintf("FixedCenters: restore %d residual %.12le bohr\n",iter,error);
             if(error<=restorationTolerance) return true;
+            restorationCount++;
             if(!prepare(c)) return false;
             if(verbose) { logPrintf("FixedCenters: center linearization ready.\n");logFlush(); }
             WannierGradient correction;
@@ -242,7 +301,7 @@ double WannierMinimizer::minimizeFixedCenters()
             double scale=1.;
             for(int trial=0;trial<16;trial++,scale*=.5)
             {
-                restore(start);step(correction,scale);
+                restore(start,false);timedStep(correction,scale);
                 std::vector<double> next;
                 if(getCenterConstraints(next) && centerError(next)<error*(1.-1e-4*scale)) { accepted=true;break; }
             }
@@ -278,8 +337,8 @@ double WannierMinimizer::minimizeFixedCenters()
         logPrintf("FixedCenters: fdTest adjoint identity error %.3le\n",adjointError);
         if(adjointError>1e-9) die("Fixed-center adjoint identity failed.\n");
         State start=save();const double eps=1e-5;
-        step(dx,eps);std::vector<double> plus;if(!getCenterConstraints(plus)) die("Undefined center in derivative check.\n");double Ep=getOmega();
-        restore(start);step(dx,-eps);std::vector<double> minus;if(!getCenterConstraints(minus)) die("Undefined center in derivative check.\n");double Em=getOmega();
+        timedStep(dx,eps);std::vector<double> plus;if(!getCenterConstraints(plus)) die("Undefined center in derivative check.\n");double Ep=timedOmega();
+        restore(start,false);timedStep(dx,-eps);std::vector<double> minus;if(!getCenterConstraints(minus)) die("Undefined center in derivative check.\n");double Em=timedOmega();
         restore(start);
         double err=0.;
         for(size_t i=0;i<c.size();i++) err=std::max(err,std::abs((plus[i]-minus[i])/(2*eps)-analytic[i]));
@@ -295,7 +354,7 @@ double WannierMinimizer::minimizeFixedCenters()
         // fixed feasibility noise does not dominate a small difference step.
         restorationTolerance=std::min(tolerance,1e-12);
         if(!feasible(false)) die("Cannot restore centers for feasible derivative check.\n");
-        WannierGradient raw;compute(&raw,0);std::vector<double> c;
+        WannierGradient raw;timedCompute(raw);std::vector<double> c;
         if(!prepare(c)) die("Cannot prepare feasible derivative check.\n");
         WannierGradient dx=raw;randomize(dx);constrain(dx);
         WannierGradient tangent;
@@ -309,12 +368,12 @@ double WannierMinimizer::minimizeFixedCenters()
             const double expected=dot(raw,tangent);State start=save();double error=0.;
             for(double h:{1e-3,5e-4})
             {
-                restore(start);step(tangent,h);
+                restore(start,false);timedStep(tangent,h);
                 if(!feasible(false)) die("Cannot restore positive feasible derivative step.\n");
-                const double plus=getOmega();
-                restore(start);step(tangent,-h);
+                const double plus=timedOmega();
+                restore(start,false);timedStep(tangent,-h);
                 if(!feasible(false)) die("Cannot restore negative feasible derivative step.\n");
-                const double minus=getOmega();
+                const double minus=timedOmega();
                 error=std::abs((plus-minus)/(2*h)-expected);
             }
             restore(start);
@@ -325,11 +384,12 @@ double WannierMinimizer::minimizeFixedCenters()
     }
     WannierGradient prevG,prevD;
     bool havePrevious=false;
-    double E=getOmega(),previous=E,alpha=std::max(1e-4,p.alphaTstart);
+    size_t trialCount=0;
+    double E=timedOmega(),previous=E,alpha=std::max(1e-4,p.alphaTstart);
     int smallChanges=0;bool converged=false,acceptedLast=false;
     for(int iter=0;!killFlag;iter++)
     {
-        WannierGradient raw;E=compute(&raw,0);
+        WannierGradient raw;E=timedCompute(raw);
         std::vector<double> c;
         if(!prepare(c) || centerError(c)>tolerance) die("Fixed-center feasibility lost.\n");
         WannierGradient g;
@@ -371,9 +431,10 @@ double WannierMinimizer::minimizeFixedCenters()
         double trialAlpha=alpha*1.5;
         for(int trial=0;trial<20;trial++,trialAlpha*=.5)
         {
-            restore(start);step(d,trialAlpha);
+            restore(start,false);timedStep(d,trialAlpha);
+            trialCount++;
             if(!feasible(false)) continue;
-            double next=getOmega();
+            double next=timedOmega();
             if(std::isfinite(next) && next<=E+1e-4*trialAlpha*slope)
             {accepted=true;break;}
         }
@@ -387,9 +448,14 @@ double WannierMinimizer::minimizeFixedCenters()
     }
     std::vector<double> finalC;
     if(!getCenterConstraints(finalC) || centerError(finalC)>tolerance) die("Final fixed-center tolerance not met.\n");
-    E=getOmega();
+    E=timedOmega();
     logPrintf("FixedCenters: final maximum center residual %.12le bohr.\n",centerError(finalC));
     logPrintf("%s%s\n",p.linePrefix,converged?"Converged (feasible projected optimization).":"Not converged (iteration limit or interruption; center constraints satisfied).");
+    mpiWorld->allReduce(updateSeconds,MPIUtil::ReduceMax);
+    mpiWorld->allReduce(objectiveSeconds,MPIUtil::ReduceMax);
+    mpiWorld->allReduce(restoreCommunicationSeconds,MPIUtil::ReduceMax);
+    logPrintf("FixedCenters: orbital updates (including step communication) %.6lf s; objective/gradient %.6lf s; restore communication %.6lf s.\n",updateSeconds,objectiveSeconds,restoreCommunicationSeconds);
+    logPrintf("FixedCenters: line-search trials %lu; Newton restoration corrections %lu.\n",trialCount,restorationCount);
     logPrintf("FixedCenters: normal solves %lu; matrix-free normal products %lu.\n",normalSolves,normalProducts);
     double storageMiB=peakStorage/(1024.*1024.);
     mpiWorld->allReduce(storageMiB,MPIUtil::ReduceMax);

@@ -531,3 +531,41 @@ matrix orthoMatrix(const matrix& A)
 	else return dagger(U);
 }
 
+
+matrix rightMultiplyOffDiagonalExp(const matrix& A, const matrix& B, double alpha)
+{
+    static StopWatch watch("rightMultiplyOffDiagonalExp"); watch.start();
+    const int p=B.nRows(), q=B.nCols(), rows=A.nRows();
+    assert(A.nCols()==p+q);
+    if(!p || !q || alpha==0.) { watch.stop(); return A; }
+    // Swap the blocks when necessary so that only min(p,q) eigenpairs are needed.
+    const bool swap=p>q;
+    const int small=swap?q:p;
+    matrix C=swap ? matrix(dagger(B)) : B;
+    matrix left=swap ? A(0,rows,p,p+q) : A(0,rows,0,p);
+    matrix right=swap ? A(0,rows,0,p) : A(0,rows,p,p+q);
+    matrix V; diagMatrix eig;
+    matrix G=C*dagger(C); G.diagonalize(V,eig);
+    // Squaring singular values loses relative accuracy in nearly-null modes.
+    // Very large rotation angles can amplify it: retain the dense reference
+    // path there rather than trade orthonormality for speed.
+    if(std::abs(alpha)*std::sqrt(std::max(0.,eig.back()))>32.) {
+        matrix full=zeroes(p+q,p+q);
+        full.set(0,p,p,p+q,B);full.set(p,p+q,0,p,dagger(B));
+        matrix result=A*cis(alpha*full);watch.stop();return result;
+    }
+    diagMatrix cosm1(small), sinc(small), cosdiv(small);
+    for(int i=0;i<small;i++) {
+        const double lambda=std::max(0.,eig[i]), root=std::sqrt(lambda), x=alpha*root;
+        cosm1[i]=-2.*std::pow(std::sin(.5*x),2);
+        sinc[i]=(std::abs(x)<1e-6) ? alpha*(1.-x*x/6.+x*x*x*x/120.) : std::sin(x)/root;
+        cosdiv[i]=(std::abs(x)<1e-6) ? -.5*alpha*alpha*(1.-x*x/12.+x*x*x*x/360.) : cosm1[i]/lambda;
+    }
+    matrix L=left*V, R=right*(dagger(C)*V);
+    matrix newLeft=left+(L*cosm1+complex(0.,1.)*(R*sinc))*dagger(V);
+    matrix newRight=right+(R*cosdiv+complex(0.,1.)*(L*sinc))*(dagger(V)*C);
+    matrix result(rows,p+q,isGpuEnabled());
+    result.set(0,rows,swap?p:0,swap?p+q:p,newLeft);
+    result.set(0,rows,swap?0:p,swap?p:p+q,newRight);
+    watch.stop(); return result;
+}
