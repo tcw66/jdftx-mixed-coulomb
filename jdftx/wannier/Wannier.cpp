@@ -160,12 +160,25 @@ void Wannier::setup(const Everything& everything)
 		}
 		t.xCenter = (1./wSum) * xSum;
 	}
-	if(fixCenters)
+	for(size_t i=0;i<trialOrbitals.size();i++)
+	{	if(!fixCenters && !trialOrbitals[i].fixed) continue;
+		const int n=nFrozen+i;
+		if(fixedCenters.count(n))
+			die("Cannot combine fixCenters yes or wannier-center-fixed with an explicit wannier-center-constraint target for the same Wannier function (%d).\n",n);
+		fixedCenters[n]=trialOrbitals[i].xCenter;
+	}
+	bool selectiveTargets=false;
+	for(const auto& t:trialOrbitals) selectiveTargets = selectiveTargets || t.fixed;
+	if(selectiveTargets)
+	{	logPrintf("\nPer-orbital center selection (0-based total WF indices; targets in lattice coordinates):\n");
 		for(size_t i=0;i<trialOrbitals.size();i++)
 		{	const int n=nFrozen+i;
-			if(fixedCenters.count(n)) die("Cannot combine fixCenters yes with explicit wannier-center-constraint targets.\n");
-			fixedCenters[n]=trialOrbitals[i].xCenter;
+			auto target=fixedCenters.find(n);
+			if(target!=fixedCenters.end())
+				logPrintf("  center %d: fixed at [ %.15g %.15g %.15g ]\n",n,target->second[0],target->second[1],target->second[2]);
+			else logPrintf("  center %d: %s\n",n,trialOrbitals[i].pinned?"soft-pinned":"free");
 		}
+	}
 	//Initialize minimizer:
 	switch(localizationMeasure)
 	{	case LM_TruncatedDC:

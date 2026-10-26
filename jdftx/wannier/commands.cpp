@@ -117,6 +117,7 @@ struct CommandWannier : public Command
 			"   windows with FiniteDifference and TruncatedDC. This adds no penalty.\n"
 			"   For composite trial orbitals, uses the coefficient-squared weighted center.\n"
 			"   Incompatible with explicit wannier-center-constraint targets and soft pinning.\n"
+			"   To fix selected orbitals, use fixCenters no and wannier-center-fixed for those trials.\n"
 			"\n+ ignoreSemiCore yes|no\n\n"
 			"   Whether to drop inner orbitals of each angular momentum when adding\n"
 			"   atomic orbitals automatically (no effect if addAtomicOrbitals = no).\n"
@@ -456,6 +457,7 @@ struct CommandWannierCenter : public Command
 	void process(ParamList& pl, Everything& e)
 	{	Wannier& wannier = ((WannierEverything&)e).wannier;
 		Wannier::TrialOrbital t;
+		t.inputCommand = name.c_str();
 		while(true)
 		{	Wannier::AtomicOrbital ao;
 			string key; pl.get(key, string(), "species");
@@ -526,7 +528,12 @@ struct CommandWannierCenter : public Command
 
 	void printStatus(Everything& e, int iRep)
 	{	const Wannier& wannier = ((const WannierEverything&)e).wannier;
-		const Wannier::TrialOrbital& t = wannier.trialOrbitals[iRep];
+		auto trial=wannier.trialOrbitals.begin();
+		int matched=0;
+		for(;trial!=wannier.trialOrbitals.end();++trial)
+			if(trial->inputCommand==name.c_str() && matched++==iRep) break;
+		if(trial==wannier.trialOrbitals.end()) die("Cannot find trial orbital for %s repetition %d.\n",name.c_str(),iRep);
+		const Wannier::TrialOrbital& t = *trial;
 		for(const Wannier::AtomicOrbital& ao: t)
 		{	if(t.size()>1) logPrintf(" \\\n\t");
 			bool isNumerical = (ao.numericalOrbIndex>=0);
@@ -559,7 +566,6 @@ commandWannierCenter;
 // Gaussian-only centers for empty cells, without an artificial ion dependency.
 struct CommandWannierCenterVacuum : public CommandWannierCenter
 {
-	std::vector<int> indices;
 	CommandWannierCenterVacuum() : CommandWannierCenter("-vacuum")
 	{	requires.erase("ion");
 		require("latt-scale");
@@ -577,16 +583,11 @@ struct CommandWannierCenterVacuum : public CommandWannierCenter
 		string first; check.get(first, string(), "Gaussian", true);
 		if(first != "Gaussian") throw string("Vacuum centers require Gaussian trial orbitals");
 		Wannier& wannier = ((WannierEverything&)e).wannier;
-		const size_t index = wannier.trialOrbitals.size();
 		ParamList gaussian(params);
 		CommandWannierCenter::process(gaussian, e);
 		for(const Wannier::AtomicOrbital& ao: wannier.trialOrbitals.back())
 			if(ao.sp >= 0 || ao.numericalOrbIndex >= 0 || ao.sigma <= 0.)
 				throw string("Vacuum centers require Gaussians with positive sigma");
-		indices.push_back(index);
-	}
-	void printStatus(Everything& e, int iRep)
-	{	CommandWannierCenter::printStatus(e, indices.at(iRep));
 	}
 }
 commandWannierCenterVacuum;
@@ -610,6 +611,30 @@ struct CommandWannierCenterPinned : public CommandWannierCenter
 	}
 }
 commandWannierCenterPinned;
+
+
+struct CommandWannierCenterFixed : public CommandWannierCenter
+{
+	CommandWannierCenterFixed() : CommandWannierCenter("-fixed")
+	{	comments =
+			"Same trial-orbital syntax as wannier-center, but constrain only this optimized\n"
+			"Wannier center by a hard equality at the trial position. No penalty is added.\n"
+			"Use wannier fixCenters no to leave ordinary wannier-center trials free.\n"
+			"fixCenters yes still fixes every optimized trial, including ordinary ones.\n"
+			"Atomic targets follow the input ion positions; composite trials use the\n"
+			"coefficient-squared weighted trial position. Coordinates follow coords-type.\n"
+			"Mixed ordinary/fixed/pinned commands preserve their input trial order.\n"
+			"Only the position is constrained: orbital shapes and rotations are optimized,\n"
+			"and unselected centers may move anywhere. Inner-window inclusion remains exact.\n"
+			"Supports FiniteDifference and TruncatedDC, with the existing hard-center\n"
+			"solver and tolerance. Soft-pinned and frozen Wannier functions cannot be\n"
+			"hard-targeted; do not also specify an explicit target for the same function.\n";
+	}
+	void process(ParamList& pl, Everything& e)
+	{	CommandWannierCenter::process(pl,e);
+		((WannierEverything&)e).wannier.trialOrbitals.back().fixed = true;
+	}
+} commandWannierCenterFixed;
 
 
 struct CommandWannierCenterConstraint : public Command

@@ -446,6 +446,9 @@ if(Python3_Interpreter_FOUND AND BERRY_SI_PSEUDO)
         add_test(NAME wannierFixedAtomicCenters COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/wannier/checkFixedAtomicCenters.py ${CMAKE_BINARY_DIR})
         set_tests_properties(wannierFixedAtomicCenters PROPERTIES TIMEOUT 180)
+        add_test(NAME wannierSelectiveCenters COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/wannier/checkSelectiveCenters.py ${CMAKE_BINARY_DIR})
+        set_tests_properties(wannierSelectiveCenters PROPERTIES TIMEOUT 180)
     endif()
 endif()
 

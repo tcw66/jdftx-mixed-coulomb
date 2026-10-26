@@ -48,8 +48,10 @@ public:
 	};
 	struct TrialOrbital : public std::vector<AtomicOrbital>
 	{	bool pinned;
+		bool fixed; //!< hard equality at this trial's position, independently of fixCenters
+		std::string inputCommand; //!< declaration type for correct mixed-command status output
 		vector3<> xCenter; //center of trial orbital in lattice coordinates (used for pinning and improved translation invariance correction)
-		TrialOrbital() : pinned(false) {}
+		TrialOrbital() : pinned(false), fixed(false) {}
 	};
 	std::vector<TrialOrbital> trialOrbitals; //!< group of centers
 	bool needAtomicOrbitals;

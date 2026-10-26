@@ -13,7 +13,7 @@ This version of [JDFTx](https://github.com/shankar1729/jdftx) provides:
   dielectric tensors, with ionic and unit-cell relaxation.
 - CPU and CUDA executables in one shared build directory.
 - Truncated density-convolution Wannier localization for entangled bands and
-  hard center constraints at the original trial-orbital positions.
+  hard center constraints on all or selected trial-orbital positions.
 
 This is the main project guide, including the complete mixed Coulomb method
 and usage instructions. Material-specific inputs and walkthroughs are linked
@@ -67,6 +67,7 @@ in the relevant sections.
 | [`phonon-dfpt-symmetries`](#phonon-dfpt-symmetries) | `jdftx` / `jdftx_gpu` |
 | [`wannier-koopmans`](#wannier-koopmans) | `wannier` / `wannier_gpu` |
 | [`wannier-center-vacuum`](#wannier-localization-and-fixed-centers) | `wannier` / `wannier_gpu` |
+| [`wannier-center-fixed`](#wannier-localization-and-fixed-centers) | `wannier` / `wannier_gpu` |
 | [`wannier-center-constraint`](#wannier-localization-and-fixed-centers) | `wannier` / `wannier_gpu` |
 | [`wannier-center-constraint-tolerance`](#wannier-localization-and-fixed-centers) | `wannier` / `wannier_gpu` |
 | [`wannier-center-constraint-solver`](#wannier-localization-and-fixed-centers) | `wannier` / `wannier_gpu` |
@@ -239,6 +240,57 @@ Infeasible targets, undefined overlap phases or failed local restoration
 cause an explicit error without relaxing the centers or inner window.
 TruncatedDC constrains the reported phase-based centers, not full
 density-convolution centers.
+
+To select hard constraints directly on the trial-orbital lines, use
+`wannier-center-fixed`, which takes the same atomic, Gaussian, numerical and
+composite-orbital syntax as `wannier-center`. For example, a defect neighborhood
+can be left free while more distant orbitals remain centered on their atoms:
+
+```text
+wannier localizationMeasure FiniteDifference fixCenters no pinAtomicOrbitals no
+# Near the defect: optimized centers may move.
+wannier-center Cu 1 2s
+wannier-center Cu 1 px
+# Far from the defect: hard center equalities, not a penalty.
+wannier-center-fixed Cu 8 2s
+wannier-center-fixed Cu 8 px
+wannier-center-constraint-tolerance 1e-8
+# List every remaining orbital explicitly, using the appropriate command.
+```
+
+Ordinary/fixed/pinned trial lines retain their input order. The log lists the
+resulting zero-based center indices and selected targets. `fixCenters yes`
+continues to constrain **all** optimized centers, so use `fixCenters no` for
+selective constraints. `wannier-center-pinned` retains its existing soft-penalty
+meaning. Fixing a center leaves that orbital's shape and rotations variational;
+free centers are not confined to the neighborhood used to select them. Atomic
+targets use the input ionic positions; a composite trial uses its
+coefficient-squared weighted trial position. Explicit indexed targets remain
+available for independently prescribed positions, but may not duplicate an
+inline fixed target on the same WF. Frozen **energy-window states** remain exact
+for both fixed and free centers; frozen Wannier functions cannot be targeted.
+
+For a radius-based atomic selection, the optional helper
+`jdftx/scripts/selectWannierCenters.py` rewrites a separately named input and
+writes a JSON mask with every selected trial and periodic defect distance:
+
+```bash
+python3 jdftx/scripts/selectWannierCenters.py \
+  --input wannier.in --geometry geometry.json --output hybrid/wannier.in \
+  --defect-atom 1 --free-radius 3.0
+```
+
+The radius is in Angstrom. `--defect-fractional x y z` specifies a defect site
+without requiring an atom there (for example, a vacancy). The geometry JSON
+contains `lattice_bohr` (3×3 matrix with lattice vectors as columns),
+`positions_fractional`, and an optional per-atom `species` list (default Cu).
+The helper uses nearest periodic images, including skew cells, leaves the radius
+boundary free, resolves input/checkpoint paths and chooses a new dump prefix.
+List Wannier settings, the dump prefix and single-atom trials directly in the
+input; included files may hold the DFT setup. Run from the original input's
+directory if included DFT files use additional relative paths.
+Use the command directly for
+Gaussian, numerical or composite trials and for independent indexed targets.
 
 ### How hard center pinning works
 
@@ -1873,9 +1925,10 @@ Run the Wannier localization and hard-center regressions with:
 
 ```bash
 ctest --test-dir build \
-  -R '^wannier(TruncatedDC|FixedCenters|FixedAtomicCenters)$' --output-on-failure
+  -R '^wannier(TruncatedDC|FixedCenters|FixedAtomicCenters|SelectiveCenters)$' --output-on-failure
 python3 jdftx/test/wannier/checkFixedCenters.py build --suffix _gpu --np 2
 python3 jdftx/test/wannier/checkFixedAtomicCenters.py build --suffix _gpu --np 2
+python3 jdftx/test/wannier/checkSelectiveCenters.py build --suffix _gpu --np 2
 python3 jdftx/test/wannier/benchmarkFixedCenters.py build --work /tmp/center-benchmark
 ```
 
@@ -1884,6 +1937,10 @@ and atomic trial positions, automatically added projections, partial Cartesian
 targets, orthonormality and inner-window inclusion. CPU, MPI and two-GPU checks
 passed. Atomic tests require the SG15 Si pseudopotential; the vacuum regression
 requires no pseudopotential.
+The selective-center regression checks mixed/interleaved free and hard-fixed
+trials against equivalent indexed constraints, movement of free centers,
+coefficient-weighted composite targets, global-fix compatibility, separate soft
+pinning, duplicate-target rejection, and the periodic radius-selection helper.
 The Gaussian regression compares both center solvers, finite differences and
 the Jacobian/adjoint identity. The benchmark uses 32 functions, 96 bands and
 an inner window, checks equivalent feasible states, and reports storage and
