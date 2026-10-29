@@ -434,6 +434,20 @@ if(Python3_Interpreter_FOUND AND NUMPY_STATUS EQUAL 0)
     add_test(NAME wannierFixedCenters COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/wannier/checkFixedCenters.py ${CMAKE_BINARY_DIR})
     set_tests_properties(wannierFixedCenters PROPERTIES TIMEOUT 180)
+    add_test(NAME wannierFixedCentersSQP COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/wannier/checkFixedCenters.py ${CMAKE_BINARY_DIR} --method SQP)
+    set_tests_properties(wannierFixedCentersSQP PROPERTIES TIMEOUT 180)
+    add_test(NAME wannierFixedCentersLBFGS COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/wannier/checkFixedCenters.py ${CMAKE_BINARY_DIR} --method LBFGS)
+    set_tests_properties(wannierFixedCentersLBFGS PROPERTIES TIMEOUT 180)
+    if(EnableMPI)
+        add_test(NAME wannierFixedCentersSQPMPI COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/wannier/checkFixedCenters.py ${CMAKE_BINARY_DIR} --method SQP --np 2)
+        set_tests_properties(wannierFixedCentersSQPMPI PROPERTIES TIMEOUT 180)
+        add_test(NAME wannierFixedCentersLBFGSMPI COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/wannier/checkFixedCenters.py ${CMAKE_BINARY_DIR} --method LBFGS --np 2)
+        set_tests_properties(wannierFixedCentersLBFGSMPI PROPERTIES TIMEOUT 180)
+    endif()
     add_test(NAME wannierFixedCentersScaling COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/wannier/benchmarkFixedCenters.py ${CMAKE_BINARY_DIR})
     set_tests_properties(wannierFixedCentersScaling PROPERTIES TIMEOUT 180)
@@ -446,6 +460,13 @@ if(Python3_Interpreter_FOUND AND BERRY_SI_PSEUDO)
         add_test(NAME wannierFixedAtomicCenters COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/wannier/checkFixedAtomicCenters.py ${CMAKE_BINARY_DIR})
         set_tests_properties(wannierFixedAtomicCenters PROPERTIES TIMEOUT 180)
+        add_test(NAME wannierFixedAtomicCentersSQP COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/wannier/checkFixedAtomicCenters.py ${CMAKE_BINARY_DIR} --method SQP)
+        set_tests_properties(wannierFixedAtomicCentersSQP PROPERTIES TIMEOUT 180)
+        add_test(NAME wannierFixedCentersLBFGSSilicon COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/wannier/benchmarkFixedCenterOptimizers.py ${CMAKE_BINARY_DIR}
+            --methods LBFGS --history 100 --iterations 2000)
+        set_tests_properties(wannierFixedCentersLBFGSSilicon PROPERTIES TIMEOUT 180)
         add_test(NAME wannierSelectiveCenters COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/wannier/checkSelectiveCenters.py ${CMAKE_BINARY_DIR})
         set_tests_properties(wannierSelectiveCenters PROPERTIES TIMEOUT 180)

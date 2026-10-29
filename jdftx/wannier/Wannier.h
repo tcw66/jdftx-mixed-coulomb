@@ -57,6 +57,10 @@ public:
 	bool needAtomicOrbitals;
 	std::map<int, vector3<>> fixedCenters; //!< hard center targets, 0-based total index, lattice coordinates
 	bool fixCenters = false; //!< constrain optimized centers to their original trial-orbital positions
+	double fixedCenterSQPRadius = .5; //!< initial SQP trust radius in the summed gradient metric
+	int fixedCenterSQPMaxCG = 200; //!< maximum Krylov iterations per SQP subproblem
+	bool fixedCenterSQP = false; //!< use matrix-free trust-region SQP instead of projected CG
+	bool fixedCenterLBFGS = false; //!< use projected limited-memory BFGS with cautious curvature updates
 	bool fixedCenterMatrixFree = true; //!< apply the center Jacobian without storing its rows
 	double fixedCenterTolerance = 1e-8; //!< maximum center displacement, bohr
 	

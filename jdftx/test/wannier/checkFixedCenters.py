@@ -13,6 +13,7 @@ p.add_argument('build',type=Path)
 p.add_argument('--suffix',default='')
 p.add_argument('--np',type=int,default=1)
 p.add_argument('--work',type=Path)
+p.add_argument('--method',choices=['CG','LBFGS','SQP'],default='CG')
 p.add_argument('--solver',choices=['MatrixFree','Explicit','Both'],default='Both')
 a=p.parse_args();build=a.build.resolve()
 temp=None
@@ -45,7 +46,7 @@ for measure,partial,solver in [(m,p,s) for m,p in [('FiniteDifference',False),('
     if not partial:text=text.replace('localizationMeasure '+measure,'localizationMeasure '+measure+' fixCenters yes')
     text+=''.join('wannier-center-vacuum Gaussian '+' '.join(map(str,row))+' 1\n' for row in (6*trials if partial else trials))
     if partial:text+=''.join(f'wannier-center-constraint {i} '+' '.join(map(str,target_cart[i]))+'\n' for i in selected)
-    text+=f'wannier-center-constraint-solver {solver}\n'
+    text+=f'wannier-center-constraint-solver {solver}\nwannier-center-constraint-method {a.method}\n'
     text+='wannier-minimize nIterations 500 energyDiffThreshold 0 knormThreshold 1e-6 fdTest yes\n'
     (root/(name+'.in')).write_text(text)
     out=run('wannier',name)
@@ -54,6 +55,13 @@ for measure,partial,solver in [(m,p,s) for m,p in [('FiniteDifference',False),('
     assert error<1e-8,(name,error)
     assert 'fdTest center Jacobian error' in out
     assert 'fdTest feasible derivative error' in out
+    if a.method=='SQP':
+        assert 'fdTest SQP Hessian symmetry error' in out
+        assert 'fdTest global phase projection' in out
+        assert 'SQP Hessian products' in out
+    if a.method=='LBFGS':
+        assert 'fdTest global phase projection' in out
+        assert 'LBFGS curvature pairs' in out
     assert 'WannierMinimize: Converged' in out,out[-4000:]
     gradients=[float(x) for x in re.findall(r'\|grad\|_K:\s*(\S+)',out)]
     assert gradients[-1]<1e-6,gradients[-1]

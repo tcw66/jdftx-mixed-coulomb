@@ -697,6 +697,61 @@ struct CommandWannierCenterConstraintSolver : public Command
 } commandWannierCenterConstraintSolver;
 
 
+struct CommandWannierCenterConstraintMethod : public Command
+{
+    CommandWannierCenterConstraintMethod() : Command("wannier-center-constraint-method", "wannier")
+    {
+        format="CG|LBFGS|SQP";
+        comments="Hard-center localization method: CG (default) uses projected nonlinear CG; LBFGS uses a projected limited-memory inverse metric; SQP uses a matrix-free trust-region Lagrangian Hessian. All restore nonlinear center constraints.\n"
+            "SQP Hessian products use central differences of analytical gradients, including rotation-coordinate curvature.\n"
+            "LBFGS uses wannier-minimize history (default 15) and alphaTstart for its initial steepest-descent step.\n"
+            "Generic wannier-minimize direction and line-search settings do not apply.\n";
+    }
+    void process(ParamList& pl, Everything& e)
+    {
+        string mode;pl.get(mode,string("CG"),"method",true);
+        if(mode!="CG" && mode!="SQP" && mode!="LBFGS") throw string("Expected CG, LBFGS or SQP");
+        ((WannierEverything&)e).wannier.fixedCenterSQP=(mode=="SQP");
+        ((WannierEverything&)e).wannier.fixedCenterLBFGS=(mode=="LBFGS");
+    }
+    void printStatus(Everything& e,int) { const auto& w=((WannierEverything&)e).wannier;logPrintf("%s",w.fixedCenterSQP?"SQP":w.fixedCenterLBFGS?"LBFGS":"CG"); }
+} commandWannierCenterConstraintMethod;
+
+
+struct CommandWannierCenterConstraintSQPKrylov : public Command
+{
+    CommandWannierCenterConstraintSQPKrylov() : Command("wannier-center-constraint-sqp-krylov", "wannier")
+    {
+        format="<iterations>";
+        comments="Maximum Krylov iterations per SQP trust-region subproblem (default 200).\n";
+    }
+    void process(ParamList& pl, Everything& e)
+    {
+        int& count=((WannierEverything&)e).wannier.fixedCenterSQPMaxCG;
+        pl.get(count,200,"iterations",true);
+        if(count<=0) throw string("Krylov iteration limit must be positive");
+    }
+    void printStatus(Everything& e,int) { logPrintf("%d",((WannierEverything&)e).wannier.fixedCenterSQPMaxCG); }
+} commandWannierCenterConstraintSQPKrylov;
+
+
+struct CommandWannierCenterConstraintSQPRadius : public Command
+{
+    CommandWannierCenterConstraintSQPRadius() : Command("wannier-center-constraint-sqp-radius", "wannier")
+    {
+        format="<radius>";
+        comments="Initial SQP trust radius in the summed WannierGradient metric (default 0.5).\n";
+    }
+    void process(ParamList& pl, Everything& e)
+    {
+        double& radius=((WannierEverything&)e).wannier.fixedCenterSQPRadius;
+        pl.get(radius,.5,"radius",true);
+        if(!std::isfinite(radius) || radius<=0.) throw string("Trust radius must be positive and finite");
+    }
+    void printStatus(Everything& e,int) { logPrintf("%.15g",((WannierEverything&)e).wannier.fixedCenterSQPRadius); }
+} commandWannierCenterConstraintSQPRadius;
+
+
 struct CommandWannierMinimize : public CommandMinimize
 {	CommandWannierMinimize() : CommandMinimize("wannier", "wannier") {}
     MinimizeParams& target(Everything& e)

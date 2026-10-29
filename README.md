@@ -201,6 +201,20 @@ with no added localization penalty. Projected conjugate gradients and Newton
 restoration preserve orthonormality and inner-window inclusion while keeping
 every accepted state within the requested maximum displacement (default
 `1e-8` bohr). `fdTest yes` checks the objective derivative and center Jacobian.
+For an opt-in quasi-Newton alternative, use
+`wannier-center-constraint-method LBFGS` and set `wannier-minimize history`
+(default 15). A history of 100 reduced the strict small-silicon test from
+6909 CG steps to 296 steps, with matched gradient/center tolerances. The
+default remains CG; the larger metallic tests have not established a completed
+speedup. See the [optimizer comparison and reproduction instructions](jdftx/test/wannier/ITERATION_SPEEDUP_VALIDATION.md).
+
+An experimental trust-region alternative is available with
+`wannier-center-constraint-method SQP`. It uses numerical Lagrangian Hessian
+products and can reduce outer iterations, but each iteration costs more
+gradient evaluations. The strict bulk-Nb stationarity test remains
+unconverged; see the [SQP validation report](jdftx/test/wannier/SQP_VALIDATION.md)
+and [method settings and regression commands](jdftx/test/wannier/README.md).
+
 The default `MatrixFree` implementation applies the Jacobian and its adjoint
 directly, solving the center normal equations with preconditioned CG instead
 of storing a gradient for every scalar constraint. It caches rectangular

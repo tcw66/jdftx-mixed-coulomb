@@ -1,0 +1,248 @@
+{
+  "date": "2026-10-28",
+  "cpu": "Intel Core i9-12900K",
+  "cuda_build": true,
+  "cuda_execution_tested": false,
+  "ctest_passed": 7,
+  "small_systems": {
+    "CG": {
+      "finitedifference-explicit": {
+        "iterations": 34,
+        "objective": 18.65784254395233,
+        "gradient": 6.776e-07,
+        "maximum_center_residual_bohr": 9.28e-09,
+        "converged": true
+      },
+      "finitedifference": {
+        "iterations": 34,
+        "objective": 18.65784254395228,
+        "gradient": 6.777e-07,
+        "maximum_center_residual_bohr": 9.28e-09,
+        "converged": true
+      },
+      "truncateddc-explicit": {
+        "iterations": 36,
+        "objective": 21.31476111478807,
+        "gradient": 8.104e-07,
+        "maximum_center_residual_bohr": 3.474e-09,
+        "converged": true
+      },
+      "truncateddc-partial-cartesian-explicit": {
+        "iterations": 79,
+        "objective": 20.93535884031818,
+        "gradient": 9.671e-07,
+        "maximum_center_residual_bohr": 9.306e-09,
+        "converged": true
+      },
+      "truncateddc-partial-cartesian": {
+        "iterations": 79,
+        "objective": 20.93535884031823,
+        "gradient": 9.671e-07,
+        "maximum_center_residual_bohr": 9.306e-09,
+        "converged": true
+      },
+      "truncateddc": {
+        "iterations": 33,
+        "objective": 21.31476111478799,
+        "gradient": 8.387e-07,
+        "maximum_center_residual_bohr": 3.468e-09,
+        "converged": true
+      }
+    },
+    "SQP": {
+      "finitedifference-explicit": {
+        "iterations": 6,
+        "objective": 18.65784254570014,
+        "gradient": 3.405e-08,
+        "maximum_center_residual_bohr": 5.803e-13,
+        "converged": true,
+        "hessian_symmetry_error": 3.009e-12,
+        "lagrangian_curvature_error": 2.236e-08,
+        "global_phase_check": true
+      },
+      "finitedifference": {
+        "iterations": 6,
+        "objective": 18.65784254569995,
+        "gradient": 3.404e-08,
+        "maximum_center_residual_bohr": 5.803e-13,
+        "converged": true,
+        "hessian_symmetry_error": 3.804e-12,
+        "lagrangian_curvature_error": 2.626e-08,
+        "global_phase_check": true
+      },
+      "truncateddc-explicit": {
+        "iterations": 6,
+        "objective": 21.31476112663013,
+        "gradient": 3.139e-07,
+        "maximum_center_residual_bohr": 8.394e-12,
+        "converged": true,
+        "hessian_symmetry_error": 1.106e-14,
+        "lagrangian_curvature_error": 1.84e-08,
+        "global_phase_check": true
+      },
+      "truncateddc-partial-cartesian-explicit": {
+        "iterations": 7,
+        "objective": 20.935358840317,
+        "gradient": 6.347e-08,
+        "maximum_center_residual_bohr": 4.335e-12,
+        "converged": true,
+        "hessian_symmetry_error": 1.237e-12,
+        "lagrangian_curvature_error": 2.238e-08,
+        "global_phase_check": true
+      },
+      "truncateddc-partial-cartesian": {
+        "iterations": 7,
+        "objective": 20.93535884031703,
+        "gradient": 6.347e-08,
+        "maximum_center_residual_bohr": 4.335e-12,
+        "converged": true,
+        "hessian_symmetry_error": 2.105e-12,
+        "lagrangian_curvature_error": 1.762e-08,
+        "global_phase_check": true
+      },
+      "truncateddc": {
+        "iterations": 6,
+        "objective": 21.31476112660909,
+        "gradient": 3.14e-07,
+        "maximum_center_residual_bohr": 1.55e-12,
+        "converged": true,
+        "hessian_symmetry_error": 1.691e-12,
+        "lagrangian_curvature_error": 1.84e-08,
+        "global_phase_check": true
+      }
+    }
+  },
+  "bulk_nb": {
+    "status": "Strict 1e-6 stationarity not reached in bounded tests; no runtime speedup established",
+    "configuration": {
+      "mu_hartree": 0.651769107,
+      "inner_window_hartree": [
+        0.501769107,
+        0.7017691070000001
+      ],
+      "outer_window_hartree": [
+        0.351769107,
+        1.101769107
+      ],
+      "source": "/home/tyler/Nb_DFPT",
+      "cache": null,
+      "kmesh": [
+        12,
+        12,
+        12
+      ],
+      "bands": 20,
+      "centers": 6,
+      "ranks": 4,
+      "krylov": 2000,
+      "initial_radius": 1.0,
+      "restart": "/tmp/sqp-nb-converged/sqp/wannier",
+      "measure": "TruncatedDC",
+      "threshold": 1e-06
+    },
+    "stages": [
+      {
+        "directory": "/tmp/sqp-nb-complete",
+        "krylov_limit": 40,
+        "ranks": 1,
+        "global_phase_projection": false,
+        "termination": "Stopped cleanly for bounded validation; strict convergence assertion did not pass",
+        "results": {
+          "iterations": 36,
+          "objective_initial": 67.02174628395483,
+          "objective": 63.3947046971142,
+          "gradient": 0.003653,
+          "center_error_bohr": 9.473776946850347e-16,
+          "orthonormality_error": 3.773915003624979e-09,
+          "inner_window_error": 1.729937261494693e-09,
+          "wall_seconds": 505.48349459201563,
+          "iteration_seconds": 491.49,
+          "converged": false,
+          "hessian_products": 577,
+          "hessian_seconds": 273.046996,
+          "trust_trials": 40,
+          "rejected_trials": 4,
+          "negative_curvature_boundaries": 2
+        }
+      },
+      {
+        "directory": "/tmp/sqp-nb-final",
+        "krylov_limit": 200,
+        "ranks": 1,
+        "global_phase_projection": false,
+        "termination": "Stopped cleanly for bounded validation; strict convergence assertion did not pass",
+        "results": {
+          "iterations": 9,
+          "objective_initial": 63.39470469629805,
+          "objective": 63.39079733570386,
+          "gradient": 6.176e-05,
+          "center_error_bohr": 7.624666348040935e-12,
+          "orthonormality_error": 2.752734172504316e-13,
+          "inner_window_error": 1.7894582161391814e-13,
+          "wall_seconds": 728.4476889320649,
+          "iteration_seconds": 633.93,
+          "converged": false,
+          "hessian_products": 986,
+          "hessian_seconds": 473.414149,
+          "trust_trials": 10,
+          "rejected_trials": 1,
+          "negative_curvature_boundaries": 0
+        }
+      },
+      {
+        "directory": "/tmp/sqp-nb-converged",
+        "krylov_limit": 2000,
+        "ranks": 4,
+        "global_phase_projection": false,
+        "termination": "Stopped cleanly for bounded validation; strict convergence assertion did not pass",
+        "results": {
+          "iterations": 14,
+          "objective_initial": 63.39079733570065,
+          "objective": 63.39073212964795,
+          "gradient": 0.0001006,
+          "center_error_bohr": 5.0549289502880183e-14,
+          "orthonormality_error": 1.925201358634761e-13,
+          "inner_window_error": 9.790995304370504e-14,
+          "wall_seconds": 1074.0226501181023,
+          "iteration_seconds": 1022.6700000000001,
+          "converged": false,
+          "hessian_products": 4484,
+          "hessian_seconds": 650.358709,
+          "trust_trials": 18,
+          "rejected_trials": 4,
+          "negative_curvature_boundaries": 0
+        }
+      },
+      {
+        "directory": "/tmp/sqp-nb-horizontal",
+        "krylov_limit": 2000,
+        "ranks": 4,
+        "global_phase_projection": true,
+        "termination": "Stopped cleanly for bounded validation; strict convergence assertion did not pass",
+        "results": {
+          "iterations": 2,
+          "objective_initial": 63.39073212964759,
+          "objective": 63.3907282440688,
+          "gradient": 0.0002939,
+          "center_error_bohr": 3.5596501188440575e-14,
+          "orthonormality_error": 9.72437513554677e-14,
+          "inner_window_error": 5.434452521323634e-14,
+          "wall_seconds": 194.30543309997302,
+          "iteration_seconds": 139.62,
+          "converged": false,
+          "hessian_products": 765,
+          "hessian_seconds": 114.689413,
+          "trust_trials": 3,
+          "rejected_trials": 1,
+          "negative_curvature_boundaries": 0
+        }
+      }
+    ],
+    "cg_partial": {
+      "status": "Interrupted; not a completed convergence benchmark",
+      "iterations": 274,
+      "objective": 63.58364222116516,
+      "gradient": 0.02424
+    }
+  }
+}

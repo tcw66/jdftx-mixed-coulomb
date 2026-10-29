@@ -1,0 +1,474 @@
+{
+  "date": "2026-10-28",
+  "implementation": "Projected inverse L-BFGS metric with cautious secants; CG remains default",
+  "gradient_threshold": 1e-06,
+  "center_tolerance_bohr": 1e-08,
+  "cpu": "Intel Core i9-12900K",
+  "cpu_ctest_passed": 10,
+  "cuda_build": true,
+  "cuda_execution_tested": false,
+  "silicon": {
+    "system": "Si, eight fixed s/p atomic trials, 12 source bands, 2x2x2 mesh",
+    "measure": "TruncatedDC",
+    "inner_window_hartree": [
+      -100,
+      -0.15
+    ],
+    "outer_window_hartree": [
+      -100,
+      100
+    ],
+    "source_scf": "/tmp/debug-atomic-baseline/scf",
+    "ranks": 1,
+    "history": 100,
+    "gradient_threshold": 1e-06,
+    "center_tolerance_bohr": 1e-08,
+    "fd_test": false,
+    "results": {
+      "CG": {
+        "iterations": 6909,
+        "converged": true,
+        "initial_objective": 46.30636309939219,
+        "objective": 42.14641399366801,
+        "gradient": 9.733e-07,
+        "maximum_center_error_bohr": 6.495083703047756e-10,
+        "exported_orthonormality_error": 2.4191328100905824e-12,
+        "inner_window_inclusion_error": 1.34e-12,
+        "iteration_seconds": 34.82,
+        "wall_seconds": 35.010971155017614,
+        "line_search_trials": 10954,
+        "gradient_evaluations": 6910,
+        "objective_only_evaluations": 10956,
+        "normal_products": 260166
+      },
+      "LBFGS": {
+        "iterations": 296,
+        "converged": true,
+        "initial_objective": 46.3063631004411,
+        "objective": 42.14641398910421,
+        "gradient": 5.722e-07,
+        "maximum_center_error_bohr": 4.040403698518205e-12,
+        "exported_orthonormality_error": 8.786175199719391e-13,
+        "inner_window_inclusion_error": 1.702e-13,
+        "iteration_seconds": 3.39,
+        "wall_seconds": 3.607521513942629,
+        "line_search_trials": 309,
+        "gradient_evaluations": 297,
+        "objective_only_evaluations": 311,
+        "normal_products": 26534
+      },
+      "SQP": {
+        "iterations": 51,
+        "converged": true,
+        "initial_objective": 46.3063631004411,
+        "objective": 42.14641398910429,
+        "gradient": 5.128e-08,
+        "maximum_center_error_bohr": 2.8412809389932423e-12,
+        "exported_orthonormality_error": 5.705433608739018e-13,
+        "inner_window_inclusion_error": 8.398e-14,
+        "iteration_seconds": 7.86,
+        "wall_seconds": 8.05736614309717,
+        "line_search_trials": 61,
+        "gradient_evaluations": 4036,
+        "objective_only_evaluations": 63,
+        "normal_products": 38341,
+        "hessian_products": 1992
+      }
+    }
+  },
+  "small_vacuum": {
+    "CG": {
+      "finitedifference-explicit": {
+        "iterations": 34,
+        "objective": 18.65784254395233,
+        "gradient": 6.776e-07,
+        "converged": true,
+        "maximum_center_residual_bohr": 7.818240923415e-10,
+        "log": "/tmp/wannier-iteration-cg-vacuum/finitedifference-explicit.out"
+      },
+      "truncateddc-explicit": {
+        "iterations": 36,
+        "objective": 21.31476111478807,
+        "gradient": 8.104e-07,
+        "converged": true,
+        "maximum_center_residual_bohr": 3.473520548621e-09,
+        "log": "/tmp/wannier-iteration-cg-vacuum/truncateddc-explicit.out"
+      },
+      "truncateddc-partial-cartesian": {
+        "iterations": 79,
+        "objective": 20.93535884031823,
+        "gradient": 9.671e-07,
+        "converged": true,
+        "maximum_center_residual_bohr": 6.147930137116e-09,
+        "log": "/tmp/wannier-iteration-cg-vacuum/truncateddc-partial-cartesian.out"
+      },
+      "truncateddc-partial-cartesian-explicit": {
+        "iterations": 79,
+        "objective": 20.93535884031818,
+        "gradient": 9.671e-07,
+        "converged": true,
+        "maximum_center_residual_bohr": 6.147853925945e-09,
+        "log": "/tmp/wannier-iteration-cg-vacuum/truncateddc-partial-cartesian-explicit.out"
+      },
+      "finitedifference": {
+        "iterations": 34,
+        "objective": 18.65784254395228,
+        "gradient": 6.777e-07,
+        "converged": true,
+        "maximum_center_residual_bohr": 7.817666494399e-10,
+        "log": "/tmp/wannier-iteration-cg-vacuum/finitedifference.out"
+      },
+      "truncateddc": {
+        "iterations": 33,
+        "objective": 21.31476111478799,
+        "gradient": 8.387e-07,
+        "converged": true,
+        "maximum_center_residual_bohr": 3.467169413526e-09,
+        "log": "/tmp/wannier-iteration-cg-vacuum/truncateddc.out"
+      }
+    },
+    "LBFGS": {
+      "finitedifference-explicit": {
+        "iterations": 24,
+        "objective": 18.65784254571244,
+        "gradient": 5.208e-07,
+        "converged": true,
+        "maximum_center_residual_bohr": 8.044077817554e-12,
+        "log": "/tmp/wannier-lbfgs-metric-vacuum/finitedifference-explicit.out"
+      },
+      "truncateddc-explicit": {
+        "iterations": 20,
+        "objective": 21.31476112659419,
+        "gradient": 3.357e-07,
+        "converged": true,
+        "maximum_center_residual_bohr": 8.398745761347e-12,
+        "log": "/tmp/wannier-lbfgs-metric-vacuum/truncateddc-explicit.out"
+      },
+      "truncateddc-partial-cartesian": {
+        "iterations": 33,
+        "objective": 20.9353588403171,
+        "gradient": 9.597e-07,
+        "converged": true,
+        "maximum_center_residual_bohr": 7.015449736863e-12,
+        "log": "/tmp/wannier-lbfgs-metric-vacuum/truncateddc-partial-cartesian.out"
+      },
+      "truncateddc-partial-cartesian-explicit": {
+        "iterations": 33,
+        "objective": 20.93535884031698,
+        "gradient": 9.597e-07,
+        "converged": true,
+        "maximum_center_residual_bohr": 7.029749163335e-12,
+        "log": "/tmp/wannier-lbfgs-metric-vacuum/truncateddc-partial-cartesian-explicit.out"
+      },
+      "finitedifference": {
+        "iterations": 24,
+        "objective": 18.65784254571252,
+        "gradient": 5.208e-07,
+        "converged": true,
+        "maximum_center_residual_bohr": 8.035970692218e-12,
+        "log": "/tmp/wannier-lbfgs-metric-vacuum/finitedifference.out"
+      },
+      "truncateddc": {
+        "iterations": 20,
+        "objective": 21.31476112659421,
+        "gradient": 3.357e-07,
+        "converged": true,
+        "maximum_center_residual_bohr": 8.404703073009e-12,
+        "log": "/tmp/wannier-lbfgs-metric-vacuum/truncateddc.out"
+      }
+    }
+  },
+  "niobium": {
+    "sd_history15": {
+      "status": "Iteration limit; not converged",
+      "summary": {
+        "mu_hartree": 0.651769107,
+        "inner_window_hartree": [
+          0.501769107,
+          0.7017691070000001
+        ],
+        "outer_window_hartree": [
+          0.351769107,
+          1.101769107
+        ],
+        "source": "/home/tyler/Nb_DFPT",
+        "cache": null,
+        "kmesh": [
+          12,
+          12,
+          12
+        ],
+        "bands": 20,
+        "centers": 6,
+        "ranks": 4,
+        "krylov": 200,
+        "initial_radius": 0.5,
+        "restart": "/tmp/sqp-nb-horizontal/sqp/wannier",
+        "measure": "TruncatedDC",
+        "threshold": 1e-06,
+        "results": {
+          "LBFGS": {
+            "iterations": 500,
+            "objective_initial": 63.39072824406867,
+            "objective": 63.39071687323873,
+            "gradient": 0.0001894,
+            "center_error_bohr": 3.489779922916163e-16,
+            "orthonormality_error": 9.486071230620807e-13,
+            "inner_window_error": 5.896667050179686e-13,
+            "wall_seconds": 286.5288745959988,
+            "iteration_seconds": 281.90000000000003,
+            "converged": false
+          }
+        }
+      }
+    },
+    "sd_history100": {
+      "status": "Stopped cleanly after new p-orbital information to test the nine-orbital model; not converged",
+      "summary": {
+        "mu_hartree": 0.651769107,
+        "inner_window_hartree": [
+          0.501769107,
+          0.7017691070000001
+        ],
+        "outer_window_hartree": [
+          0.351769107,
+          1.101769107
+        ],
+        "source": "/home/tyler/Nb_DFPT",
+        "cache": null,
+        "kmesh": [
+          12,
+          12,
+          12
+        ],
+        "bands": 20,
+        "centers": 6,
+        "ranks": 4,
+        "krylov": 200,
+        "history": 100,
+        "initial_radius": 0.5,
+        "restart": "/tmp/sqp-nb-horizontal/sqp/wannier",
+        "measure": "TruncatedDC",
+        "threshold": 1e-06,
+        "results": {
+          "LBFGS": {
+            "iterations": 399,
+            "objective_initial": 63.39072824406867,
+            "objective": 63.39072333392117,
+            "gradient": 0.0001725,
+            "center_error_bohr": 7.209148147050835e-14,
+            "orthonormality_error": 4.407707780628943e-13,
+            "inner_window_error": 3.8415323163899656e-13,
+            "wall_seconds": 249.41582128498703,
+            "iteration_seconds": 244.42000000000002,
+            "converged": false
+          }
+        }
+      }
+    },
+    "model_update": {
+      "augmented_pseudopotential": "/home/tyler/Nb_DFPT/pseudopotentials/Nb-SG15-5p/Nb_SG15_PBE_5p.upf",
+      "hamiltonian_numerical_blocks_match_original": true,
+      "added_trials": [
+        "2px",
+        "2py",
+        "2pz"
+      ],
+      "inner_window_hartree": [
+        0,
+        0.7
+      ],
+      "outer_window_hartree": [
+        0,
+        1.7
+      ],
+      "outer_minimum_bands": 12,
+      "inner_maximum_bands": 5
+    },
+    "spd_lbfgs": {
+      "status": "Not converged; bounded trajectory, not a completed speedup",
+      "summary": {
+        "mu_hartree": 0.651769107,
+        "inner_window_hartree": [
+          0.0,
+          0.7
+        ],
+        "outer_window_hartree": [
+          0.0,
+          1.7
+        ],
+        "source": "/home/tyler/Nb_DFPT",
+        "cache": null,
+        "kmesh": [
+          12,
+          12,
+          12
+        ],
+        "bands": 20,
+        "centers": 9,
+        "orbitals": [
+          "2s",
+          "dz2",
+          "dxy",
+          "dxz",
+          "dx2-y2",
+          "dyz",
+          "2px",
+          "2py",
+          "2pz"
+        ],
+        "ranks": 4,
+        "krylov": 200,
+        "history": 100,
+        "initial_radius": 0.5,
+        "restart": "/home/tyler/Nb_DFPT/wannier",
+        "measure": "TruncatedDC",
+        "threshold": 1e-06,
+        "results": {
+          "LBFGS": {
+            "iterations": 102,
+            "objective_initial": 539.3552618269993,
+            "objective": 72.2221020807238,
+            "gradient": 0.06626,
+            "center_error_bohr": 1.5255033748113596e-14,
+            "orthonormality_error": 9.340473978959255e-13,
+            "inner_window_error": 6.060480839141004e-13,
+            "wall_seconds": 392.67698680993635,
+            "iteration_seconds": 379.99,
+            "converged": false
+          }
+        }
+      },
+      "termination": "Stopped cleanly after approximately 6.5 minutes; last printed gradient retained separately from final exported-state checks",
+      "source_restart_rotations_sha256": "5215dfe9e2e64611506ba035a15b26aed420e4cdc9c6c46d9cf0350528e5278a",
+      "iteration_100": {
+        "iteration": 100,
+        "objective": 72.26043739778537,
+        "gradient": 0.05768,
+        "center_error_bohr": 4.073e-14,
+        "seconds": 381.94
+      }
+    },
+    "spd_cg": {
+      "status": "Not converged; bounded trajectory, not a completed speedup",
+      "summary": {
+        "mu_hartree": 0.651769107,
+        "inner_window_hartree": [
+          0.0,
+          0.7
+        ],
+        "outer_window_hartree": [
+          0.0,
+          1.7
+        ],
+        "source": "/home/tyler/Nb_DFPT",
+        "cache": null,
+        "kmesh": [
+          12,
+          12,
+          12
+        ],
+        "bands": 20,
+        "centers": 9,
+        "orbitals": [
+          "2s",
+          "dz2",
+          "dxy",
+          "dxz",
+          "dx2-y2",
+          "dyz",
+          "2px",
+          "2py",
+          "2pz"
+        ],
+        "ranks": 4,
+        "krylov": 200,
+        "history": 100,
+        "initial_radius": 0.5,
+        "restart": "/home/tyler/Nb_DFPT/wannier",
+        "measure": "TruncatedDC",
+        "threshold": 1e-06,
+        "results": {
+          "CG": {
+            "iterations": 132,
+            "objective_initial": 539.3552618269993,
+            "objective": 73.84244290348981,
+            "gradient": 0.08988,
+            "center_error_bohr": 4.195100944251185e-14,
+            "orthonormality_error": 7.443156763384112e-13,
+            "inner_window_error": 5.141606639750202e-13,
+            "wall_seconds": 392.36034630797803,
+            "iteration_seconds": 381.36,
+            "converged": false
+          }
+        }
+      },
+      "termination": "Stopped cleanly after approximately 6.5 minutes; last printed gradient retained separately from final exported-state checks",
+      "source_restart_rotations_sha256": "5215dfe9e2e64611506ba035a15b26aed420e4cdc9c6c46d9cf0350528e5278a",
+      "iteration_100": {
+        "iteration": 100,
+        "objective": 74.68242037081961,
+        "gradient": 0.06093,
+        "center_error_bohr": 8.107e-11,
+        "seconds": 307.85
+      }
+    },
+    "spd_atomic_probe": {
+      "status": "Not converged; bounded trajectory, not a completed speedup",
+      "summary": {
+        "mu_hartree": 0.651769107,
+        "inner_window_hartree": [
+          0.0,
+          0.7
+        ],
+        "outer_window_hartree": [
+          0.0,
+          1.7
+        ],
+        "source": "/home/tyler/Nb_DFPT",
+        "cache": "/home/tyler/Nb_DFPT/wannier",
+        "kmesh": [
+          12,
+          12,
+          12
+        ],
+        "bands": 20,
+        "centers": 9,
+        "orbitals": [
+          "2s",
+          "dz2",
+          "dxy",
+          "dxz",
+          "dx2-y2",
+          "dyz",
+          "2px",
+          "2py",
+          "2pz"
+        ],
+        "ranks": 4,
+        "krylov": 200,
+        "history": 100,
+        "initial_radius": 0.5,
+        "restart": null,
+        "restart_rotations_sha256": null,
+        "measure": "TruncatedDC",
+        "threshold": 1e-06,
+        "results": {
+          "LBFGS": {
+            "iterations": 1,
+            "objective_initial": 99.70401263185141,
+            "objective": 95.5040491678101,
+            "gradient": 1.843,
+            "center_error_bohr": 4.1107176164254237e-13,
+            "orthonormality_error": 3.426582268195515e-13,
+            "inner_window_error": 2.3432555210621815e-13,
+            "wall_seconds": 14.674317689961754,
+            "iteration_seconds": 0.9000000000000004,
+            "converged": false
+          }
+        }
+      }
+    },
+    "conclusion": "No completed Nb convergence/runtime speedup demonstrated. Nine-orbital basis and wider window are recorded; initialize from atomic trials for further comparisons."
+  }
+}

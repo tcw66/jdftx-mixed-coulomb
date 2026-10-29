@@ -20,11 +20,24 @@ checks, inner window, and orthonormality requirements:
   are not immediately followed by an update still communicate.
 - Phase timings and line-search counts are printed for diagnosis.
 
-A projected L-BFGS candidate was implemented, tested and **reverted**. On the
+A previous projected L-BFGS candidate was implemented, tested and **reverted**. On the
 matrix-free CPU regression its extra tangent transports increased runtime
 (about 0.12 to 0.21 seconds in the MV case) despite reducing iterations. The
-retained optimizer is the original projected Polak–Ribiere CG. Generic
-`dirUpdateScheme`/`history` settings remain ignored for hard-center optimization.
+default optimizer remains projected Polak–Ribiere CG. Generic
+`dirUpdateScheme` settings remain ignored for hard-center optimization.
+
+A subsequent opt-in `wannier-center-constraint-method LBFGS` uses a projected
+inverse metric without transporting every stored pair. It honors
+`wannier-minimize history`. Completed silicon comparisons demonstrate fewer
+iterations and lower runtime than CG; this is a different implementation from
+the discarded candidate. See [iteration-speedup validation](ITERATION_SPEEDUP_VALIDATION.md)
+for matched stopping tolerances, timings, and the remaining Nb limitation.
+
+The optional trust-region SQP implementation added subsequently is selected with
+`wannier-center-constraint-method SQP`; CG remains the default. Its Lagrangian
+Hessian products use central differences with rotation chart corrections. See
+[the SQP instructions](README.md#matrix-free-trust-region-sqp) and
+[SQP validation](SQP_VALIDATION.md) for separate convergence measurements.
 
 ## Numerical checks
 

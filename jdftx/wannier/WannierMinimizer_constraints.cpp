@@ -103,16 +103,21 @@ double WannierMinimizer::minimizeFixedCenters()
     centerDiagnostics=p.fdTest;
     if(p.maxThreshold) die("Hard-center optimization supports knormThreshold, but not maxThreshold.\n");
     const double tolerance=wannier.fixedCenterTolerance;
-    double restorationTolerance=tolerance;
+    const bool lbfgs=wannier.fixedCenterLBFGS;
+    if(lbfgs && p.history<1) die("Hard-center LBFGS requires a positive history length.\n");
+    const double productionRestorationTolerance=(wannier.fixedCenterSQP || lbfgs) ? std::min(tolerance,1e-11) : tolerance;
+    double restorationTolerance=productionRestorationTolerance;
     double updateSeconds=0.,objectiveSeconds=0.,restoreCommunicationSeconds=0.;
-    size_t restorationCount=0;
+    size_t restorationCount=0,objectiveEvaluations=0,gradientEvaluations=0;
     auto timedStep=[&](const WannierGradient& direction,double alpha) {
         const double start=clock_sec(); step(direction,alpha); updateSeconds+=clock_sec()-start;
     };
     auto timedOmega=[&]() {
+        objectiveEvaluations++;
         const double start=clock_sec();double E=getOmega();objectiveSeconds+=clock_sec()-start;return E;
     };
     auto timedCompute=[&](WannierGradient& grad) {
+        gradientEvaluations++;
         const double start=clock_sec();double E=compute(&grad,0);objectiveSeconds+=clock_sec()-start;return E;
     };
     typedef std::vector<std::pair<matrix,matrix>> State;
@@ -175,9 +180,9 @@ double WannierMinimizer::minimizeFixedCenters()
     // Recycled positive-curvature secants approximate the inverse normal operator.
     // They are frozen within each PCG solve, keeping its preconditioner linear/SPD.
     std::deque<std::pair<std::vector<double>,std::vector<double>>> normalHistory;
-    auto normal=[&](const std::vector<double>& b,WannierGradient& correction) {
+    auto normal=[&](const std::vector<double>& b,WannierGradient& correction,std::vector<double>* multipliers=nullptr) {
         normalSolves++;const double start=clock_sec();
-        if(!matrixFree) { correction=adjoint(applyConstraintMatrix(Gi,b));solveSeconds+=clock_sec()-start;return true; }
+        if(!matrixFree) { const auto x=applyConstraintMatrix(Gi,b);correction=adjoint(x);if(multipliers) *multipliers=x;solveSeconds+=clock_sec()-start;return true; }
         const size_t m=b.size();
         const auto scale=centerJacobianScaling();
         std::vector<double> x(m,0.),r=b,z(m),d(m);
@@ -258,12 +263,44 @@ double WannierMinimizer::minimizeFixedCenters()
         }
         if(!solved) { solveSeconds+=clock_sec()-start;return false; }
         for(auto& pair:newHistory) {normalHistory.push_back(std::move(pair));if(normalHistory.size()>8) normalHistory.pop_front();}
-        correction=adjoint(x);solveSeconds+=clock_sec()-start;return true;
+        correction=adjoint(x);if(multipliers) *multipliers=x;solveSeconds+=clock_sec()-start;return true;
+    };
+    // Quotient out one k-independent phase for each free Wannier orbital.
+    // These directions leave both the objective and centers invariant, but
+    // their chart-Hessian cross terms away from stationarity can attract
+    // spurious trust-boundary steps. Use their exact small Gram matrix so
+    // roundoff in the orbital frames does not compromise the projection.
+    auto removeGlobalPhases=[&](WannierGradient& v) {
+        if(!wannier.fixedCenterSQP && !lbfgs) return;
+        const int n=nCenters-nFrozen;
+        if(!n) return;
+        std::vector<double> packed(n+n*n,0.);
+        for(size_t ik=ikStart;ik<ikStop;ik++)
+        {
+            const matrix Q=kMesh[ik].U2(nFrozen,nCenters,nFrozen,nCenters);
+            const matrix D=dagger(Q)*v.B2[ik]*Q, S=dagger(Q)*Q;
+            for(int i=0;i<n;i++)
+            {
+                packed[i]+=D.data()[D.index(i,i)].real();
+                for(int j=0;j<n;j++) packed[n+i*n+j]+=S.data()[S.index(i,j)].norm();
+            }
+        }
+        mpiWorld->allReduceData(packed,MPIUtil::ReduceSum);
+        matrix G=zeroes(n,n);
+        std::vector<double> rhs(packed.begin(),packed.begin()+n);
+        for(int i=0;i<n;i++) for(int j=0;j<n;j++) G.data()[G.index(i,j)]=packed[n+i*n+j];
+        const auto weights=applyConstraintMatrix(inv(G),rhs);
+        diagMatrix diagonal(n);for(int i=0;i<n;i++) diagonal[i]=weights[i];
+        for(size_t ik=ikStart;ik<ikStop;ik++)
+        {
+            const matrix Q=kMesh[ik].U2(nFrozen,nCenters,nFrozen,nCenters);
+            v.B2[ik]-=Q*diagonal*dagger(Q);
+        }
     };
     auto project=[&](const WannierGradient& v,WannierGradient& result) {
         WannierGradient correction;
         if(!normal(Jv(v),correction)) return false;
-        result=v;axpy(-1.,correction,result);
+        result=v;axpy(-1.,correction,result);removeGlobalPhases(result);
         // A small residual relative to J*v can still leave a large normal
         // component when the raw gradient/Jacobian is large. Check tangency
         // of the RESULT, and refine rather than reporting a false projection.
@@ -273,7 +310,7 @@ double WannierMinimizer::minimizeFixedCenters()
             const double target=1e-8*std::max(1.,std::sqrt(dot(result,result)));
             if(std::sqrt(scalarDot(drift,drift))<=target) return true;
             if(!normal(drift,correction)) return false;
-            axpy(-1.,correction,result);
+            axpy(-1.,correction,result);removeGlobalPhases(result);
         }
         const auto drift=Jv(result);
         const double target=1e-8*std::max(1.,std::sqrt(dot(result,result)));
@@ -310,7 +347,8 @@ double WannierMinimizer::minimizeFixedCenters()
         return false;
     };
     logPrintf("\nFixedCenters: enforcing %lu center equalities (tolerance %.3le bohr).\n",wannier.fixedCenters.size(),tolerance);
-    logPrintf("FixedCenters: using projected Polak-Ribiere CG with Armijo search and Newton restoration; generic direction/line-search options do not apply.\n");
+    logPrintf("FixedCenters: using %s with Newton restoration; generic direction/line-search options do not apply.\n",
+        wannier.fixedCenterSQP?"matrix-free trust-region SQP (central-difference Lagrangian Hessian)":lbfgs?"projected limited-memory BFGS with Armijo search":"projected Polak-Ribiere CG with Armijo search");
 
     logPrintf("FixedCenters: %s center solver.\n",matrixFree?"MatrixFree (PCG, overlap row scaling)":"Explicit (dense pseudoinverse)");
 
@@ -380,9 +418,76 @@ double WannierMinimizer::minimizeFixedCenters()
             logPrintf("FixedCenters: fdTest feasible derivative error %.3le; tangent residual %.3le\n",error,driftNorm);
             if(error>5e-5*std::max(1.,std::abs(expected))) die("Feasible localization derivative check failed.\n");
         }
-        restorationTolerance=tolerance;
+        restorationTolerance=productionRestorationTolerance;
     }
+    size_t hessianProducts=0,trustTrials=0,trustRejected=0,negativeCurvature=0;
+    double hessianSeconds=0.,trustRadius=wannier.fixedCenterSQPRadius;
+    // The metric sums over k points and orbitals. A fixed radius cap would
+    // artificially limit per-orbital rotations as the mesh/system grows.
+    const double maxTrustRadius=std::max(trustRadius,std::max(10.,std::sqrt(double(kMesh.size())*nCenters)));
+    // Differentiate L in the ORIGINAL step chart, not the moving generator
+    // coordinates returned by compute(). For right-trivialized stage 1 the
+    // exponential pullback is F + i*h*[H,F]/2 + O(h^2); for left-trivialized
+    // stage 2 it is F - i*h*[H,F]/2 + O(h^2). The omitted terms give O(h^2)
+    // error in the central Hessian product. Only the required blocks are built.
+    auto chartGradient=[&](const WannierGradient& direction,double h,
+            const std::vector<double>& lambda,WannierGradient& result) {
+        timedCompute(result);
+        std::vector<matrix> right(ikStop-ikStart);
+        for(size_t ik=ikStart;ik<ikStop;ik++)
+            right[ik-ikStart]=kMesh[ik].Omega_UdotU*dagger(kMesh[ik].U2);
+        std::vector<double> c;
+        if(!prepareCenterJacobian(c)) return false;
+        const WannierGradient constraint=applyCenterJacobianAdjoint(lambda);
+        axpy(1.,constraint,result);
+        for(size_t ik=ikStart;ik<ikStop;ik++)
+        {
+            const auto& ki=kMesh[ik];
+            // The adjoint leaves its reduced overlap cotangent in the U1 frame.
+            const matrix R=right[ik-ikStart]+ki.Omega_UdotU;
+            if(ki.nIn>nCenters)
+            {
+                const matrix C=complex(0,.5)*(ki.U2(ki.nFixed,nCenters,0,nCenters)
+                    *R(0,nCenters,ki.nFixed,nCenters));
+                const matrix F=C+dagger(C);
+                result.B1[ik]+=complex(0,-.5*h)*(F*direction.B1[ik]);
+            }
+            const matrix& H=direction.B2[ik];
+            const matrix F=result.B2[ik];
+            result.B2[ik]+=complex(0,-.5*h)*(H*F-F*H);
+        }
+        constrain(result);
+        return true;
+    };
+    auto hessian=[&](const State& base,const std::vector<double>& lambda,
+            const WannierGradient& v,WannierGradient& Hv) {
+        const double start=clock_sec();hessianProducts++;
+        const double norm=std::sqrt(dot(v,v));
+        if(norm<1e-30) {Hv=v;Hv*=0.;return true;}
+        // A fixed displacement norm keeps differencing error independent of
+        // Krylov-vector magnitude. No feasibility restoration at probe points:
+        // lambda is frozen, so this differentiates the Lagrangian itself.
+        const double h=1e-4/norm;
+        WannierGradient plus,minus;
+        restore(base,false);timedStep(v,h);
+        bool valid=chartGradient(v,h,lambda,plus);
+        if(valid) {
+            restore(base,false);timedStep(v,-h);
+            valid=chartGradient(v,-h,lambda,minus);
+        }
+        restore(base);
+        std::vector<double> c;
+        if(!prepare(c)) die("Cannot restore SQP base linearization.\n");
+        if(valid) {Hv=plus;axpy(-1.,minus,Hv);Hv*=.5/h;}
+        hessianSeconds+=clock_sec()-start;
+        return valid;
+    };
+    bool checkedHessian=false,checkedPhases=false;
     WannierGradient prevG,prevD;
+    struct CurvaturePair { WannierGradient s,y;double rho,scale; };
+    std::deque<CurvaturePair> history;
+    size_t curvaturePairs=0,curvatureSkipped=0,historyRestarts=0;
+    size_t historyStorage=0;
     bool havePrevious=false;
     size_t trialCount=0;
     double E=timedOmega(),previous=E,alpha=std::max(1e-4,p.alphaTstart);
@@ -394,6 +499,34 @@ double WannierMinimizer::minimizeFixedCenters()
         if(!prepare(c) || centerError(c)>tolerance) die("Fixed-center feasibility lost.\n");
         WannierGradient g;
         if(!project(raw,g)) die("Fixed-center normal solve failed to converge. Try Explicit solver or improve the trial subspace.\n");
+        if(p.fdTest && (wannier.fixedCenterSQP || lbfgs) && !checkedPhases)
+        {
+            State base=save();
+            WannierGradient phase=g;phase*=0.;
+            diagMatrix phases(nCenters-nFrozen);
+            for(int n=0;n<nCenters-nFrozen;n++) phases[n]=std::sin(1.+n);
+            for(size_t ik=ikStart;ik<ikStop;ik++)
+            {
+                const matrix Q=kMesh[ik].U2(nFrozen,nCenters,nFrozen,nCenters);
+                phase.B2[ik]=Q*phases*dagger(Q);
+            }
+            const double norm=std::sqrt(dot(phase,phase));
+            if(norm>0.) phase*=1./norm;
+            WannierGradient horizontal=phase;removeGlobalPhases(horizontal);
+            const double phaseProjection=std::sqrt(dot(horizontal,horizontal));
+            const auto phaseDrift=Jv(phase);
+            const double phaseJacobian=std::sqrt(scalarDot(phaseDrift,phaseDrift));
+            const double phaseSlope=std::abs(dot(raw,phase));
+            const double phaseE=timedOmega();
+            timedStep(phase,.1);const double phaseEnergyError=std::abs(timedOmega()-phaseE);
+            restore(base);
+            if(!prepare(c)) die("Cannot restore global-phase check.\n");
+            logPrintf("FixedCenters: fdTest global phase projection %.3le; Jacobian %.3le; slope %.3le; energy error %.3le\n",
+                phaseProjection,phaseJacobian,phaseSlope,phaseEnergyError);
+            if(phaseProjection>1e-9 || phaseJacobian>1e-9 || phaseSlope>1e-8 || phaseEnergyError>1e-8)
+                die("Fixed-center global-phase invariance check failed.\n");
+            checkedPhases=true;
+        }
         const double gSq=dot(g,g),gNorm=std::sqrt(gSq/std::max(size_t(1),p.nDim));
         if(p.fdTest)
         {
@@ -408,8 +541,161 @@ double WannierMinimizer::minimizeFixedCenters()
         const bool done=p.convergeAll ? ((p.knormThreshold<=0. || gradDone) && (p.energyDiffThreshold<=0. || energyDone) && (p.knormThreshold>0. || p.energyDiffThreshold>0.)) : (gradDone || energyDone);
         if(done || gSq<1e-28) {converged=true;break;}
         if(iter>=p.nIterations) break;
+        if(wannier.fixedCenterSQP)
+        {
+            State base=save();
+            WannierGradient correction;
+            std::vector<double> lambda;
+            if(!normal(Jv(raw),correction,&lambda)) die("SQP multiplier solve failed.\n");
+            for(double& x:lambda) x=-x;
+            if(p.fdTest && !checkedHessian)
+            {
+                WannierGradient u=g,v=g,Hu,Hv;
+                randomize(u);randomize(v);constrain(u);constrain(v);
+                u*=1./std::sqrt(dot(u,u));v*=1./std::sqrt(dot(v,v));
+                if(!hessian(base,lambda,u,Hu) || !hessian(base,lambda,v,Hv))
+                    die("Undefined center in SQP Hessian check.\n");
+                const double uv=dot(u,Hv),vu=dot(v,Hu);
+                const double symmetry=std::abs(uv-vu)/std::max(1.,std::max(std::abs(uv),std::abs(vu)));
+                auto lagrangian=[&]() {
+                    std::vector<double> residual;
+                    if(!getCenterConstraints(residual)) die("Undefined center in Lagrangian check.\n");
+                    return timedOmega()+scalarDot(lambda,residual);
+                };
+                const double L0=lagrangian(),eps=1e-3;
+                timedStep(v,eps);const double Lp=lagrangian();
+                restore(base,false);timedStep(v,-eps);const double Lm=lagrangian();
+                restore(base);
+                if(!prepare(c)) die("Cannot restore SQP derivative check.\n");
+                const double expected=dot(v,Hv),observed=(Lp-2*L0+Lm)/(eps*eps);
+                const double error=std::abs(expected-observed)/std::max(1.,std::abs(expected));
+                logPrintf("FixedCenters: fdTest SQP Hessian symmetry error %.3le; Lagrangian curvature error %.3le\n",symmetry,error);
+                if(symmetry>2e-5 || error>2e-4) die("SQP Lagrangian Hessian check failed.\n");
+                checkedHessian=true;
+            }
+            bool accepted=false;
+            for(int trial=0;trial<20 && !killFlag;trial++)
+            {
+                trustTrials++;
+                // Steihaug CG for min g.s + s.H.s/2, J.s=0, |s|<=radius.
+                // Every Hessian product is projected with the frozen base J.
+                WannierGradient s=g,Hs=g,r=g,d=g;
+                s*=0.;Hs*=0.;d*=-1.;
+                double rr=gSq;
+                const double eta=std::min(.5,std::max(.01,std::sqrt(gNorm)));
+                bool boundary=false,valid=true;
+                int inner=0;
+                for(;inner<wannier.fixedCenterSQPMaxCG && !killFlag;inner++)
+                {
+                    WannierGradient Hd,unprojected;
+                    if(!hessian(base,lambda,d,unprojected) || !project(unprojected,Hd)) {valid=false;break;}
+                    const double dd=dot(d,d),sd=dot(s,d),ss=dot(s,s),dHd=dot(d,Hd);
+                    // Positive root of |s+tau*d|=radius, stable for sd>=0.
+                    const double gap=std::max(0.,trustRadius*trustRadius-ss);
+                    const double root=std::sqrt(std::max(0.,sd*sd+dd*gap));
+                    const double tau=sd>=0. ? gap/std::max(1e-300,root+sd) : (root-sd)/dd;
+                    if(dHd<=0. || rr/dHd>=tau)
+                    {
+                        axpy(tau,d,s);axpy(tau,Hd,Hs);boundary=true;
+                        if(dHd<=0.) negativeCurvature++;
+                        inner++;break;
+                    }
+                    const double a=rr/dHd;
+                    axpy(a,d,s);axpy(a,Hd,Hs);axpy(a,Hd,r);
+                    const double next=dot(r,r);
+                    if((inner+1)%25==0)
+                    {
+                        logPrintf("FixedCenters: SQP Krylov %d residual %.3le (target %.3le).\n",
+                            inner+1,std::sqrt(next),eta*std::sqrt(gSq));logFlush();
+                    }
+                    if(std::sqrt(next)<=eta*std::sqrt(gSq)) {inner++;break;}
+                    d*=next/rr;axpy(-1.,r,d);rr=next;
+                }
+                const double prediction=-dot(g,s)-.5*dot(s,Hs);
+                double ratio=-1.,next=E;
+                if(valid && std::isfinite(prediction) && prediction>0. && !killFlag)
+                {
+                    restore(base,false);timedStep(s,1.);trialCount++;
+                    if(feasible(false))
+                    {
+                        next=timedOmega();
+                        if(std::isfinite(next)) ratio=(E-next)/prediction;
+                    }
+                }
+                if(ratio<.25) trustRadius*=.25;
+                else if(ratio>.75 && boundary) trustRadius=std::min(maxTrustRadius,2.*trustRadius);
+                logPrintf("FixedCenters: SQP trial %d Krylov %d predicted %.6le ratio %.6le radius %.6le boundary %s\n",
+                    trial,inner,prediction,ratio,trustRadius,boundary?"yes":"no");logFlush();
+                if(ratio>.1 && next<E) {accepted=true;break;}
+                trustRejected++;
+                restore(base);
+                if(!prepare(c)) die("Cannot restore rejected SQP trial.\n");
+                if(trustRadius<1e-12) break;
+            }
+            if(!accepted)
+            {
+                restore(base);
+                if(killFlag) break;
+                die("Fixed-center SQP trust region failed; localization did not converge.\n");
+            }
+            previous=E;acceptedLast=true;
+            continue;
+        }
         WannierGradient d=g;d*=-1.;
-        if(havePrevious)
+        if(lbfgs && havePrevious)
+        {
+            // History defines an SPD inverse preconditioner in generator
+            // coordinates. Apply P H P to obtain the tangent search direction;
+            // this avoids two normal solves per stored pair at every iteration.
+            // Only the NEW secant needs projection transport to the current
+            // tangent space. This is a safeguarded projected quasi-Newton
+            // metric, not an exact parallel-transport BFGS update.
+            bool valid=true;
+            WannierGradient oldG,s;
+            if(project(prevG,oldG) && project(prevD,s))
+            {
+                s*=alpha;
+                WannierGradient y=g;axpy(-1.,oldG,y);
+                const double sy=dot(s,y),ss=dot(s,s),yy=dot(y,y);
+                if(std::isfinite(sy) && sy>1e-8*std::sqrt(ss*yy) && sy>1e-30)
+                {
+                    history.push_back({s,y,1./sy,std::max(1e-6,std::min(1e8,sy/yy))});
+                    curvaturePairs++;
+                }
+                else curvatureSkipped++;
+                while(history.size()>size_t(p.history)) history.pop_front();
+                size_t bytes=0;
+                for(size_t ik=ikStart;ik<ikStop;ik++)
+                    bytes+=(g.B1[ik].nRows()*g.B1[ik].nCols()+g.B2[ik].nRows()*g.B2[ik].nCols())*sizeof(complex);
+                historyStorage=std::max(historyStorage,2*bytes*history.size());
+                // Two-loop inverse-BFGS application. Cautious positive-curvature
+                // updates keep the search metric positive definite without HVPs.
+                WannierGradient q=g;
+                std::vector<double> coefficients(history.size());
+                for(int j=int(history.size())-1;j>=0;j--)
+                {
+                    coefficients[j]=history[j].rho*dot(history[j].s,q);
+                    axpy(-coefficients[j],history[j].y,q);
+                }
+                if(!history.empty())
+                {
+                    q*=history.back().scale;
+                }
+                for(size_t j=0;j<history.size();j++)
+                    axpy(coefficients[j]-history[j].rho*dot(history[j].y,q),history[j].s,q);
+                // Resolve accumulated transport/roundoff error independently.
+                if(project(q,d)) d*=-1.;
+                else valid=false;
+            }
+            else valid=false;
+            if(!valid)
+            {
+                history.clear();havePrevious=false;historyRestarts++;
+                d=g;d*=-1.;
+                logPrintf("FixedCenters: restarting LBFGS after direction-transport solve failure.\n");
+            }
+        }
+        else if(havePrevious)
         {
             WannierGradient diff=g;axpy(-1.,prevG,diff);
             double beta=std::max(0.,dot(g,diff)/std::max(1e-30,dot(prevG,prevG)));
@@ -424,11 +710,16 @@ double WannierMinimizer::minimizeFixedCenters()
             }
         }
         double slope=dot(g,d);
-        if(slope>=-1e-3*gSq) {d=g;d*=-1.;slope=-gSq;}
+        const double descentThreshold=lbfgs ? 1e-12*std::sqrt(gSq*dot(d,d)) : 1e-3*gSq;
+        if(!std::isfinite(slope) || slope>=-descentThreshold)
+        {
+            d=g;d*=-1.;slope=-gSq;
+            if(lbfgs) {history.clear();historyRestarts++;}
+        }
         State start=save();bool accepted=false;
         // Let backtracking determine the scale. A hard cap of three stalls
         // soft localization modes even when much larger steps decrease Omega.
-        double trialAlpha=alpha*1.5;
+        double trialAlpha=lbfgs ? (history.empty()?std::max(1e-4,p.alphaTstart):1.) : alpha*1.5;
         for(int trial=0;trial<20;trial++,trialAlpha*=.5)
         {
             restore(start,false);timedStep(d,trialAlpha);
@@ -441,7 +732,7 @@ double WannierMinimizer::minimizeFixedCenters()
         if(!accepted)
         {
             restore(start);
-            if(havePrevious) { havePrevious=false;alpha=std::max(1e-6,alpha*.25);continue; }
+            if(havePrevious) { havePrevious=false;history.clear();if(lbfgs) historyRestarts++;alpha=std::max(1e-6,alpha*.25);continue; }
             die("Fixed-center line search failed; constraints remain satisfied, but localization did not converge.\n");
         }
         previous=E;alpha=trialAlpha;prevG=g;prevD=d;havePrevious=true;acceptedLast=true;
@@ -457,6 +748,21 @@ double WannierMinimizer::minimizeFixedCenters()
     logPrintf("FixedCenters: orbital updates (including step communication) %.6lf s; objective/gradient %.6lf s; restore communication %.6lf s.\n",updateSeconds,objectiveSeconds,restoreCommunicationSeconds);
     logPrintf("FixedCenters: line-search trials %lu; Newton restoration corrections %lu.\n",trialCount,restorationCount);
     logPrintf("FixedCenters: normal solves %lu; matrix-free normal products %lu.\n",normalSolves,normalProducts);
+    logPrintf("FixedCenters: objective-only evaluations %lu; gradient evaluations %lu.\n",objectiveEvaluations,gradientEvaluations);
+    if(lbfgs)
+    {
+        double historyMiB=historyStorage/(1024.*1024.);
+        mpiWorld->allReduce(historyMiB,MPIUtil::ReduceMax);
+        logPrintf("FixedCenters: LBFGS curvature pairs %lu; skipped %lu; history restarts %lu; history limit %d.\n",
+            curvaturePairs,curvatureSkipped,historyRestarts,p.history);
+        logPrintf("FixedCenters: peak LBFGS history storage %.6lf MiB/rank.\n",historyMiB);
+    }
+    if(wannier.fixedCenterSQP)
+    {
+        mpiWorld->allReduce(hessianSeconds,MPIUtil::ReduceMax);
+        logPrintf("FixedCenters: SQP Hessian products %lu (%.6lf s); trust trials %lu; rejected %lu; negative-curvature boundaries %lu.\n",
+            hessianProducts,hessianSeconds,trustTrials,trustRejected,negativeCurvature);
+    }
     double storageMiB=peakStorage/(1024.*1024.);
     mpiWorld->allReduce(storageMiB,MPIUtil::ReduceMax);
     mpiWorld->allReduce(prepareSeconds,MPIUtil::ReduceMax);mpiWorld->allReduce(solveSeconds,MPIUtil::ReduceMax);
