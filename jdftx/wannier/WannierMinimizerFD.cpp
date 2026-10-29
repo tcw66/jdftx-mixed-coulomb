@@ -18,6 +18,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 -------------------------------------------------------------------*/
 
 #include <wannier/WannierMinimizerFD.h>
+#include <wannier/WannierFDOperators.h>
 
 //Find a finite difference formula given a list of relative neighbour positions (in cartesian coords)
 //[Appendix B of Phys Rev B 56, 12847]
@@ -312,22 +313,35 @@ double WannierMinimizerFD::getOmega(bool grad)
 	//Compute the expectation values of r and rSq for each center (split over processes)
 	rSqExpect.assign(nCenters, 0.);
 	rExpect.assign(nCenters, vector3<>());
-	std::vector<matrix> Mcache((ikStop-ikStart)*edges[0].size());
-	matrix* McachePtr = Mcache.data();
+	const size_t nEdges=edges[0].size(), count=(ikStop-ikStart)*nEdges;
+	std::vector<matrix> Mcache(grad ? count : 0);
+	matrix diagonals(nCenters,count,isGpuEnabled());
+	size_t pos=0;
 	for(size_t ik=ikStart; ik<ikStop; ik++)
-	{	const KmeshEntry& ki = kMesh[ik];
 		for(const Edge& edge: edges[ik])
-		{	const KmeshEntry& kj = kMesh[edge.ik];
-			matrix& M = *(McachePtr++);
-			M = dagger(ki.U) * edge.M0 * kj.U;
-			const complex* Mdata = M.data();
+		{
+			const auto& Ui=kMesh[ik].U;const auto& Uj=kMesh[edge.ik].U;
+			// Line searches only need the occupied overlap block.
+			matrix M=grad ? dagger(Ui)*edge.M0*Uj
+				: dagger(Ui(0,nBands,0,nCenters))*edge.M0*Uj(0,nBands,0,nCenters);
+			wannierDiagonal(M,diagonals,pos);
+			if(grad) Mcache[pos]=std::move(M);
+			pos++;
+		}
+	const complex* diagonal=diagonals.data(); //one host transfer for the entire sweep
+	pos=0;
+	for(size_t ik=ikStart; ik<ikStop; ik++)
+	{
+		const KmeshEntry& ki=kMesh[ik];
+		for(const Edge& edge: edges[ik])
+		{
 			for(int n=0; n<nCenters; n++)
-			{	complex Tnn = cis(dot(rPinned[n], edge.b)); //translation phase to rPinned as origin
-				complex Mnn = Mdata[M.index(n,n)] * Tnn;
-				double argMnn = Mnn.arg();
-				rExpect[n] -= (ki.point.weight * edge.wb * argMnn) * edge.b;
-				rSqExpect[n] += ki.point.weight * edge.wb * (argMnn*argMnn + 1. - Mnn.norm());
+			{	complex Mnn=diagonal[pos*nCenters+n]*cis(dot(rPinned[n],edge.b));
+				double argMnn=Mnn.arg();
+				rExpect[n]-=(ki.point.weight*edge.wb*argMnn)*edge.b;
+				rSqExpect[n]+=ki.point.weight*edge.wb*(argMnn*argMnn+1.-Mnn.norm());
 			}
+			pos++;
 		}
 	}
 	mpiWorld->allReduceData(rSqExpect, MPIUtil::ReduceSum);
@@ -348,27 +362,28 @@ double WannierMinimizerFD::getOmega(bool grad)
 	
 	//Compute gradients if required:
 	if(grad)
-	{	const matrix* McachePtr = Mcache.data();
+	{
+		matrix derivatives(nCenters,count);
+		complex* d=derivatives.data();pos=0;
 		for(size_t ik=ikStart; ik<ikStop; ik++)
-		{	KmeshEntry& ki = kMesh[ik];
-			for(Edge& edge: edges[ik])
-			{	KmeshEntry& kj = kMesh[edge.ik];
-				const matrix& M = *(McachePtr++);
-				//Compute dOmega/dM:
-				std::vector<complex> Omega_M(nCenters);
-				const complex* Mdata = M.data();
+			for(const Edge& edge: edges[ik])
+			{
 				for(int n=0; n<nCenters; n++)
-				{	complex Tnn = cis(dot(rPinned[n], edge.b));
-					complex Mnn = Mdata[M.index(n,n)] * Tnn;
-					double argMnn = Mnn.arg();
-					Omega_M[n] = 2. * ki.point.weight * edge.wb * Tnn
-						* ((argMnn + dot(mHalf_Omega_rExpect[n],edge.b))*complex(0,-1)/Mnn - Mnn.conj());
+				{	complex Tnn=cis(dot(rPinned[n],edge.b));
+					complex Mnn=diagonal[pos*nCenters+n]*Tnn;
+					d[pos*nCenters+n]=2.*kMesh[ik].point.weight*edge.wb*Tnn
+						*((Mnn.arg()+dot(mHalf_Omega_rExpect[n],edge.b))*complex(0,-1)/Mnn-Mnn.conj());
 				}
-				//Propagate Omega_M to Omega_U:
-				ki.Omega_UdotU += dagger(M(0,M.nRows(), 0,nCenters) * Omega_M);
-				kj.Omega_UdotU += Omega_M * M(0,nCenters, 0,M.nCols());
+				pos++;
 			}
-		}
+		pos=0;
+		for(size_t ik=ikStart; ik<ikStop; ik++)
+			for(const Edge& edge: edges[ik])
+			{
+				wannierOverlapGradient(Mcache[pos],Mcache[pos],derivatives,pos,
+					kMesh[ik].Omega_UdotU,kMesh[edge.ik].Omega_UdotU);
+				pos++;
+			}
 	}
 	watch.stop();
 	return Omega;
@@ -402,18 +417,28 @@ double WannierMinimizerFD::getOmegaI(bool grad)
 // Do not interchange the k average and the absolute value.
 double WannierMinimizerFD::getOmegaTDC(bool grad)
 {
+	static StopWatch watch("WannierMinimizerFD::getOmegaTDC");watch.start();
 	const size_t nEdges = edges[0].size();
 	std::vector<complex> rho(nEdges*nCenters, complex(0.,0.));
-	std::vector<matrix> cache((ikStop-ikStart)*nEdges);
-	size_t pos = 0;
+	const size_t count=(ikStop-ikStart)*nEdges;
+	std::vector<matrix> cache(grad ? count : 0);
+	matrix diagonals(nCenters,count,isGpuEnabled());
+	size_t pos=0;
 	for(size_t ik=ikStart; ik<ikStop; ik++)
 		for(size_t ib=0; ib<nEdges; ib++)
-		{	const Edge& edge = edges[ik][ib];
-			matrix& M = cache[pos++];
-			M = dagger(kMesh[ik].U) * edge.M0 * kMesh[edge.ik].U;
-			for(int n=0; n<nCenters; n++)
-				rho[ib*nCenters+n] += kMesh[ik].point.weight * M.data()[M.index(n,n)];
+		{	const Edge& edge=edges[ik][ib];
+			const auto& Ui=kMesh[ik].U;const auto& Uj=kMesh[edge.ik].U;
+			matrix M=grad ? dagger(Ui)*edge.M0*Uj
+				: dagger(Ui(0,nBands,0,nCenters))*edge.M0*Uj(0,nBands,0,nCenters);
+			wannierDiagonal(M,diagonals,pos);
+			if(grad) cache[pos]=std::move(M);
+			pos++;
 		}
+	const complex* diagonal=diagonals.data();pos=0;
+	for(size_t ik=ikStart; ik<ikStop; ik++)
+		for(size_t ib=0; ib<nEdges; ib++,pos++)
+			for(int n=0; n<nCenters; n++)
+				rho[ib*nCenters+n]+=kMesh[ik].point.weight*diagonal[pos*nCenters+n];
 	mpiWorld->allReduceData(rho, MPIUtil::ReduceSum);
 	rExpect.assign(nCenters, vector3<>());
 	rSqExpect.assign(nCenters, 0.);
@@ -435,22 +460,27 @@ double WannierMinimizerFD::getOmegaTDC(bool grad)
 		rSqExpect[n] += rExpect[n].length_squared();
 	}
 	if(grad)
-	{	pos = 0;
+	{
+		matrix derivatives(nCenters,count);
+		complex* d=derivatives.data();pos=0;
 		for(size_t ik=ikStart; ik<ikStop; ik++)
-			for(size_t ib=0; ib<nEdges; ib++)
-			{	const Edge& edge = edges[ik][ib];
-				const matrix& M = cache[pos++];
-				std::vector<complex> Omega_M(nCenters);
+			for(size_t ib=0; ib<nEdges; ib++,pos++)
 				for(int n=0; n<nCenters; n++)
-				{	const complex z = rho[ib*nCenters+n];
-					const double mag = sqrt(z.norm());
-					// At zero the modulus is nonsmooth; select the zero subgradient.
-					Omega_M[n] = mag ? (-2.*kMesh[ik].point.weight*edge.wb/mag)*z.conj() : complex(0.,0.);
+				{	const complex z=rho[ib*nCenters+n];
+					const double mag=sqrt(z.norm());
+					// Select the zero subgradient at the nonsmooth origin.
+					d[pos*nCenters+n]=mag ? (-2.*kMesh[ik].point.weight*edges[ik][ib].wb/mag)*z.conj() : complex(0.,0.);
 				}
-				kMesh[ik].Omega_UdotU += dagger(M(0,M.nRows(), 0,nCenters)*Omega_M);
-				kMesh[edge.ik].Omega_UdotU += Omega_M*M(0,nCenters, 0,M.nCols());
+		pos=0;
+		for(size_t ik=ikStart; ik<ikStop; ik++)
+			for(const Edge& edge: edges[ik])
+			{
+				wannierOverlapGradient(cache[pos],cache[pos],derivatives,pos,
+					kMesh[ik].Omega_UdotU,kMesh[edge.ik].Omega_UdotU);
+				pos++;
 			}
 	}
+	watch.stop();
 	return Omega;
 }
 
@@ -462,19 +492,27 @@ bool WannierMinimizerFD::getCenterConstraints(std::vector<double>& residual,
 {
     const size_t nb=edges[0].size(), nc=wannier.fixedCenters.size();
     const bool tdc=wannier.localizationMeasure==Wannier::LM_TruncatedDC;
-    std::vector<matrix> cache((ikStop-ikStart)*nb);
+    const size_t count=(ikStop-ikStart)*nb;
+    std::vector<matrix> cache(jacobian ? count : 0);
     std::vector<complex> rho(nb*nCenters,complex(0.,0.));
+    matrix diagonals(nCenters,count,isGpuEnabled());
     size_t pos=0;
     for(size_t ik=ikStart;ik<ikStop;ik++)
         for(size_t ib=0;ib<nb;ib++)
         {
             const Edge& edge=edges[ik][ib];
-            matrix& M=cache[pos++];
+            matrix M;
             if(jacobian) M=dagger(kMesh[ik].U)*edge.M0*kMesh[edge.ik].U;
             else M=dagger(kMesh[ik].U(0,nBands,0,nCenters))*edge.M0*kMesh[edge.ik].U(0,nBands,0,nCenters);
-            if(tdc) for(const auto& target: wannier.fixedCenters)
-                rho[ib*nCenters+target.first]+=kMesh[ik].point.weight*M.data()[M.index(target.first,target.first)];
+            wannierDiagonal(M,diagonals,pos);
+            if(jacobian) cache[pos]=std::move(M);
+            pos++;
         }
+    const complex* diagonal=diagonals.data();
+    if(tdc)
+        for(size_t ik=ikStart;ik<ikStop;ik++) for(size_t ib=0;ib<nb;ib++)
+            for(const auto& target: wannier.fixedCenters)
+                rho[ib*nCenters+target.first]+=kMesh[ik].point.weight*diagonal[((ik-ikStart)*nb+ib)*nCenters+target.first];
     if(tdc) mpiWorld->allReduceData(rho,MPIUtil::ReduceSum);
     residual.assign(3*nc,0.);
     bool valid=true;
@@ -486,8 +524,7 @@ bool WannierMinimizerFD::getCenterConstraints(std::vector<double>& residual,
             for(size_t ib=0;ib<nb;ib++)
             {
                 const Edge& edge=edges[ik][ib];
-                const matrix& M=cache[(ik-ikStart)*nb+ib];
-                const complex z=M.data()[M.index(n,n)];
+                const complex z=diagonal[((ik-ikStart)*nb+ib)*nCenters+n];
                 if(!std::isfinite(z.norm()) || z.norm()<1e-20) valid=false;
                 const double phase=(z*cis(dot(rPinned[n],edge.b))).arg();
                 const double weight=kMesh[ik].point.weight;
@@ -525,19 +562,26 @@ bool WannierMinimizerFD::getCenterConstraints(std::vector<double>& residual,
         for(int d=0;d<3;d++)
         {
             for(KmeshEntry& ki:kMesh) if(ki.U) ki.Omega_UdotU=zeroes(nCenters,ki.nIn);
+            matrix derivatives(nCenters,cache.size());derivatives.zero();
+            complex* derivative=derivatives.data();
             pos=0;
             for(size_t ik=ikStart;ik<ikStop;ik++)
                 for(size_t ib=0;ib<nb;ib++)
                 {
                     const Edge& edge=edges[ik][ib];
-                    const matrix& M=cache[pos++];
+                    const size_t edgeIndex=pos++;
                     if(edge.b[d]==0.) continue;
-                    const complex z=tdc ? rho[ib*nCenters+n] : M.data()[M.index(n,n)];
-                    std::vector<complex> derivative(nCenters,complex(0.,0.));
-                    derivative[n]=(-kMesh[ik].point.weight*edge.wb*edge.b[d])*complex(0.,-1.)/z;
-                    kMesh[ik].Omega_UdotU+=dagger(M(0,M.nRows(),0,nCenters)*derivative);
-                    kMesh[edge.ik].Omega_UdotU+=derivative*M(0,nCenters,0,M.nCols());
+                    const complex z=tdc ? rho[ib*nCenters+n] : diagonal[edgeIndex*nCenters+n];
+                    derivative[edgeIndex*nCenters+n]=(-kMesh[ik].point.weight*edge.wb*edge.b[d])*complex(0.,-1.)/z;
                 }
+            pos=0;
+            for(size_t ik=ikStart;ik<ikStop;ik++) for(const Edge& edge:edges[ik])
+            {
+                if(edge.b[d]!=0.)
+                    wannierOverlapGradient(cache[pos],cache[pos],derivatives,pos,
+                        kMesh[ik].Omega_UdotU,kMesh[edge.ik].Omega_UdotU);
+                pos++;
+            }
             collectRotationGradient((*jacobian)[3*ic+d]);
         }
         ic++;

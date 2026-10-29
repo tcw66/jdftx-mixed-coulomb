@@ -1,5 +1,6 @@
 /* Matrix-free center derivatives in the inner-window-preserving rotation metric. */
 #include <wannier/WannierMinimizerFD.h>
+#include <wannier/WannierFDOperators.h>
 #include <algorithm>
 #include <cmath>
 
@@ -23,6 +24,7 @@ bool WannierMinimizerFD::prepareCenterJacobian(std::vector<double>& residual)
         MPIUtil::Request request;kMesh[ik].mpi->bcastData(frames[ik],0,&request);frameRequests.push_back(request);
     }
     MPIUtil::waitAll(frameRequests);
+    matrix diagonals(nCenters,centerLeft.size(),isGpuEnabled());
     size_t pos=0;
     for(size_t ik=ikStart;ik<ikStop;ik++) for(size_t ib=0;ib<nb;ib++,pos++)
     {
@@ -30,17 +32,21 @@ bool WannierMinimizerFD::prepareCenterJacobian(std::vector<double>& residual)
         const auto& Ui=kMesh[ik].U;const auto& Uj=kMesh[edge.ik].U;
         centerLeft[pos]=dagger(Ui)*(edge.M0*Uj(0,nBands,0,nCenters));
         centerRight[pos]=dagger(Ui(0,nBands,0,nCenters))*edge.M0*Uj;
+        wannierDiagonal(centerLeft[pos],diagonals,pos);
+        centerLeft[pos]=frames[ik]*centerLeft[pos];
+        centerRight[pos]=centerRight[pos]*dagger(frames[edge.ik]);
+    }
+    const complex* diagonal=diagonals.data();pos=0;
+    for(size_t ik=ikStart;ik<ikStop;ik++) for(size_t ib=0;ib<nb;ib++,pos++)
+    {
         size_t ic=0;
         for(const auto& target:wannier.fixedCenters)
         {
-            const int n=target.first;
-            complex z=centerLeft[pos].data()[centerLeft[pos].index(n,n)];
+            const complex z=diagonal[pos*nCenters+target.first];
             centerZ[pos*nc+ic]=z;
             if(tdc) rho[ib*nc+ic]+=kMesh[ik].point.weight*z;
             ic++;
         }
-        centerLeft[pos]=frames[ik]*centerLeft[pos];
-        centerRight[pos]=centerRight[pos]*dagger(frames[edge.ik]);
     }
     if(tdc)
     {
@@ -123,17 +129,20 @@ std::vector<double> WannierMinimizerFD::applyCenterJacobian(const WannierGradien
     MPIUtil::waitAll(requests);
     const size_t nb=edges[0].size(),nc=wannier.fixedCenters.size();
     std::vector<double> result(3*nc,0.);size_t pos=0;
+    matrix contractions(nCenters,centerLeft.size(),isGpuEnabled());
     for(size_t ik=ikStart;ik<ikStop;ik++) for(size_t ib=0;ib<nb;ib++,pos++)
     {
         const auto& edge=edges[ik][ib];
-        const matrix dFirst=columnDot(dagger(centerRight[pos]),A[edge.ik]);
-        const matrix dSecond=columnDot(A[ik],centerLeft[pos]);
-        const complex* first=dFirst.data(); const complex* second=dSecond.data();
-        size_t ic=0;
+        wannierCenterVariation(centerLeft[pos],centerRight[pos],A[ik],A[edge.ik],contractions,pos);
+    }
+    const complex* values=contractions.data();pos=0;
+    for(size_t ik=ikStart;ik<ikStop;ik++) for(size_t ib=0;ib<nb;ib++,pos++)
+    {
+        const auto& edge=edges[ik][ib];size_t ic=0;
         for(const auto& target:wannier.fixedCenters)
         {
             int n=target.first;
-            const double phaseDerivative=((first[n]-second[n])/centerZ[pos*nc+ic]).real();
+            const double phaseDerivative=(values[pos*nCenters+n]/centerZ[pos*nc+ic]).real();
             for(int d=0;d<3;d++) result[3*ic+d]-=kMesh[ik].point.weight*edge.wb*edge.b[d]*phaseDerivative;
             ic++;
         }
@@ -148,18 +157,25 @@ WannierGradient WannierMinimizerFD::applyCenterJacobianAdjoint(const std::vector
     const size_t nb=edges[0].size(),nc=wannier.fixedCenters.size();
     assert(v.size()==3*nc);
     for(auto& ki:kMesh) if(ki.U) ki.Omega_UdotU=zeroes(nCenters,ki.nIn);
+    matrix derivatives(nCenters,centerLeft.size());derivatives.zero();
+    complex* derivative=derivatives.data();
     size_t pos=0;
     for(size_t ik=ikStart;ik<ikStop;ik++) for(size_t ib=0;ib<nb;ib++,pos++)
     {
         const auto& edge=edges[ik][ib];
-        std::vector<complex> derivative(nCenters,complex(0.,0.));size_t ic=0;
+        size_t ic=0;
         for(const auto& target:wannier.fixedCenters)
         {
             double coefficient=0.;for(int d=0;d<3;d++) coefficient-=v[3*ic+d]*kMesh[ik].point.weight*edge.wb*edge.b[d];
-            derivative[target.first]=coefficient*complex(0.,-1.)/centerZ[pos*nc+ic];ic++;
+            derivative[pos*nCenters+target.first]=coefficient*complex(0.,-1.)/centerZ[pos*nc+ic];ic++;
         }
-        kMesh[ik].Omega_UdotU+=dagger(centerLeft[pos]*derivative);
-        kMesh[edge.ik].Omega_UdotU+=derivative*centerRight[pos];
+    }
+    pos=0;
+    for(size_t ik=ikStart;ik<ikStop;ik++) for(const auto& edge:edges[ik])
+    {
+        wannierOverlapGradient(centerLeft[pos],centerRight[pos],derivatives,pos,
+            kMesh[ik].Omega_UdotU,kMesh[edge.ik].Omega_UdotU);
+        pos++;
     }
     WannierGradient result;collectRotationGradient(result,true);return result;
 }

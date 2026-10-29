@@ -487,3 +487,17 @@ set_tests_properties(structuredWannierUpdates PROPERTIES TIMEOUT 60 ENVIRONMENT 
 if(EnableCUDA)
     set_tests_properties(structuredWannierUpdatesGPU PROPERTIES TIMEOUT 60 ENVIRONMENT "OMP_NUM_THREADS=2;OPENBLAS_NUM_THREADS=1")
 endif()
+
+# Device-resident overlap derivatives, including self edges and unequal windows.
+add_executable(checkWannierFDOperators wannier/checkFDOperators.cpp ../wannier/WannierFDOperators.cpp)
+target_link_libraries(checkWannierFDOperators jdftxlib)
+set_JDFTx_flags(checkWannierFDOperators OFF)
+add_test(NAME wannierFDOperators COMMAND checkWannierFDOperators)
+set_tests_properties(wannierFDOperators PROPERTIES TIMEOUT 60 ENVIRONMENT "OMP_NUM_THREADS=2;OPENBLAS_NUM_THREADS=1")
+if(EnableCUDA)
+    add_executable(checkWannierFDOperators_gpu wannier/checkFDOperators.cpp ../wannier/WannierFDOperators.cpp)
+    target_link_libraries(checkWannierFDOperators_gpu jdftxlib_gpu CUDA::cudart)
+    set_JDFTx_flags(checkWannierFDOperators_gpu ON)
+    add_test(NAME wannierFDOperatorsGPU COMMAND checkWannierFDOperators_gpu)
+    set_tests_properties(wannierFDOperatorsGPU PROPERTIES TIMEOUT 60 ENVIRONMENT "OMP_NUM_THREADS=2;OPENBLAS_NUM_THREADS=1")
+endif()

@@ -260,7 +260,7 @@ if(EnableCUDA)
 
 	#Library with all the functionality:
 	FILE(GLOB jdftxlibSources core/*.cpp fluid/*.cpp electronic/*.cpp perturb/*.cpp commands/*.cpp)
-	FILE(GLOB gpukernelsSources core/*.cu fluid/*.cu electronic/*.cu commands/*.cu tests/*.cu)
+	FILE(GLOB gpukernelsSources core/*.cu fluid/*.cu electronic/*.cu commands/*.cu tests/*.cu wannier/*.cu)
 	add_library(jdftxlib_gpu ${LINK_TYPE} ${jdftxlibSources} ${gpukernelsSources})
 	target_link_libraries(jdftxlib_gpu ${EXTERNAL_LIBS} CUDA::cublas CUDA::cufft)
 	set_target_properties(jdftxlib_gpu PROPERTIES OUTPUT_NAME "jdftx_gpu")

@@ -105,12 +105,17 @@ void WannierMinimizer::saveMLWF(int iSpin)
 		//Find range of centers that span each band:
 		std::vector<int> nMin(nBands, nCenters), nMax(nBands, 0);
 		for(const KmeshEntry& ke: kMesh)
+		{
+			// Inspect each rotation in one host transfer, rather than copying
+			// one device element at a time on non-root MPI ranks.
+			const complex* U=ke.U.data();
 			for(int n=0; n<nCenters; n++)
 				for(int b=0; b<nBands; b++)
-					if(ke.U(b,n).norm() > 1e-12)
+					if(U[ke.U.index(b,n)].norm() > 1e-12)
 					{	nMin[b] = std::min(nMin[b], n);
 						nMax[b] = std::max(nMax[b], n);
 					}
+		}
 		//Find energy range that is exact for each range of centers:
 		std::map< std::pair<int,int>, std::pair<double,double> > nRangeToErange;
 		nRangeToErange[std::make_pair(-1,-1)] = std::make_pair(NAN,NAN);
