@@ -1,0 +1,10 @@
+include common.in
+kpoint-folding 8 8 8
+wannier-initial-state results/Si.$VAR
+wannier-dump-name results/Si.$VAR
+wannier-center Gaussian 0.125 0.125 0.125 1
+wannier-center Gaussian -0.375 0.125 0.125 1
+wannier-center Gaussian 0.125 -0.375 0.125 1
+wannier-center Gaussian 0.125 0.125 -0.375 1
+wannier saveMomenta yes
+wannier-minimize nIterations 100 energyDiffThreshold 1e-8

@@ -167,6 +167,7 @@ void SpeciesInfo::setup(const Everything &everything)
 	{	case Fhi: readFhi(ifs); break;
 		case Uspp: readUspp(ifs); break;
 		case UPF: readUPF(ifs); break;
+		case PAWxml: readPAW(ifs); break;
 	}
 	
 	//Add citation for recognized sources:

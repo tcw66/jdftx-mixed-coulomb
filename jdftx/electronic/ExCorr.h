@@ -93,6 +93,10 @@ public:
 	double operator()(const ScalarField& n, ScalarField* Vxc=0, IncludeTXC includeTXC=IncludeTXC(),
 		const ScalarField* tau=0, ScalarField* Vtau=0, matrix3<>* Exc_RRT=0) const;
 
+	//! Unpolarized internal PBE on an arbitrary quadrature (for PAW spheres).
+	bool supportsPAW() const;
+	void evaluatePAW(int count, const double* n, const double* sigma, double* energy, double* dn, double* dsigma) const;
+
 	double exxFactor() const; //!< retrieve the exact exchange scale factor (0 if no exact exchange)
 	double exxRange() const; //!< range parameter (omega) for screened exchange (0 for long-range exchange)
 	bool needsKEdensity() const; //!< whether orbital KE density is required as an input (for meta GGAs)

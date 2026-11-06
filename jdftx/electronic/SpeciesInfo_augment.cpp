@@ -18,6 +18,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 -------------------------------------------------------------------*/
 
 #include <electronic/SpeciesInfo.h>
+#include <electronic/PAW.h>
 #include <electronic/SpeciesInfo_internal.h>
 #include <electronic/Everything.h>
 #include <electronic/ColumnBundle.h>
@@ -358,6 +359,15 @@ void SpeciesInfo::augmentDensitySphericalGrad(const QuantumNumber& qnum, const m
 		matrix atomVdagC = VdagCq(Vatomindex*nProj,(Vatomindex+1)*nProj, 0,VdagCq.nCols());
 		matrix E_atomRhoVdagC = E_RhoAll * atomVdagC;
 		E_RhoVdagC.set(Vatomindex*nProj,(Vatomindex+1)*nProj, 0,VdagCq.nCols(), E_atomRhoVdagC);
+	}
+	if(paw)
+	{	for(unsigned a=0; a<atoms; a++)
+		{	int actual = (atom>=0) ? atom : a;
+			matrix p = VdagCq(a*nProj, (a+1)*nProj, 0, VdagCq.nCols());
+			matrix value = E_RhoVdagC(a*nProj, (a+1)*nProj, 0, VdagCq.nCols());
+			value += paw->phaseMatrix(paw->potential[actual]) * p;
+			E_RhoVdagC.set(a*nProj, (a+1)*nProj, 0, VdagCq.nCols(), value);
+		}
 	}
 	HVdagCq += E_RhoVdagC;
 	watch.stop();

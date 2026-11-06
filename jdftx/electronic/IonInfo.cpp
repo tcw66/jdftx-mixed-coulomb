@@ -190,7 +190,9 @@ void IonInfo::update(Energies& ener)
 	//---------- energies dependent on ionic positions alone ----------------
 	
 	//Energies due to partial electronic cores:
-	ener.E["Exc_core"] = nCore ? -e->exCorr(nCore, 0, false, &tauCore) : 0.0;
+	bool allPAW = !species.empty();
+	for(auto sp: species) if(!sp->atpos.empty()) allPAW &= sp->isPAW();
+	ener.E["Exc_core"] = (!allPAW && nCore) ? -e->exCorr(nCore, 0, false, &tauCore) : 0.0;
 	
 	//Energies from pair-potential terms (Ewald etc.):
 	pairPotentialsAndGrad(&ener);
@@ -200,7 +202,10 @@ void IonInfo::update(Energies& ener)
 }
 
 double IonInfo::ionicEnergyAndGrad()
-{	const ElecInfo &eInfo = e->eInfo;
+{
+	for(auto sp: species) if(sp->isPAW())
+		die("PAW ionic forces and stress are not implemented.\n");
+	const ElecInfo &eInfo = e->eInfo;
 	const ElecVars &eVars = e->eVars;
 	
 	//Pure LJ pair potential override for ionic algorithm testing:
@@ -690,4 +695,14 @@ double IonInfo::calcEpulay(matrix3<>* E_RRT) const
 	return dEtot_dnG * 
 		( sqrt(2.0)*pow(e->cntrl.Ecut,1.5)/(3.0*M_PI*M_PI) //ideal nG
 		-  nbasisAvg/e->gInfo.detR ); //actual nG
+}
+
+
+matrix IonInfo::allElectronMomentum(const ColumnBundle& c, int dir) const
+{
+	for(auto sp: species) if(!sp->atpos.empty() && !sp->isPAW())
+		die("All-electron momentum requires PAW datasets for every species.\n");
+	matrix p = complex(0., -e->gInfo.detR) * (c^D(c,dir));
+	for(auto sp: species) p += sp->pawMomentum(c, dir);
+	return p;
 }

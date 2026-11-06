@@ -1204,3 +1204,21 @@ void ExCorr::get_dVxc(const ScalarFieldArray& n, ScalarFieldArray* dVxc, Include
 	}
 	*dVxc = dVxcOut;
 }
+
+
+bool ExCorr::supportsPAW() const
+{
+	return exCorrType==ExCorrGGA_PBE && kineticType==KineticNone && !orbitalDep && !exxFactor();
+}
+
+void ExCorr::evaluatePAW(int count, const double* n, const double* sigma,
+	double* energy, double* dn, double* dsigma) const
+{
+	if(!supportsPAW()) die("PAW one-center XC requires the internal PBE functional.\n");
+	std::fill(energy, energy+count, 0.);
+	std::fill(dn, dn+count, 0.);
+	std::fill(dsigma, dsigma+count, 0.);
+	// Use the smooth-grid implementations, explicitly on CPU even in CUDA builds:
+	for(auto variant: {GGA_X_PBE, GGA_C_PBE})
+		GGA(variant, count, {n}, {sigma}, energy, {dn}, {dsigma}, 1.);
+}

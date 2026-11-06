@@ -30,6 +30,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 class ColumnBundle;
 class QuantumNumber;
 class Basis;
+class ExCorr;
 
 //! @addtogroup IonicSystem
 //! @{
@@ -79,11 +80,22 @@ public:
 	void print(FILE* fp) const; //!< print ionic positions from current species
 	void populationAnalysis(const std::vector<matrix>& RhoAll) const; //!< print population analysis given the density matrix in the Lowdin basis
 	bool isRelativistic() const { return psi2j.size(); } //!< whether pseudopotential is relativistic
+	bool isPAW() const { return bool(paw); } //!< frozen-core projector augmented wave dataset
+	std::shared_ptr<struct PAW> paw; //!< PAW radial data and current on-site density matrices
+	//! PAW density-matrix energy, reconstruction, and physical operator corrections.
+	double pawEnergyAndPotential(const ExCorr&);
+	void pawSymmetrizeDensity();
+	void pawAccumulateDensity(const QuantumNumber&, const diagMatrix&, const matrix&);
+	ColumnBundle pawReconstruct(const ColumnBundle&, const Basis&) const;
+	matrix pawOverlap(const vector3<>& dk) const;
+	matrix pawMomentum(const ColumnBundle&, int direction) const;
+
 	bool isUltrasoft() const { return Qint.size(); } //!< whether pseudopotential is ultrasoft
 	
 	enum PseudopotentialFormat
 	{	Fhi, //!< FHI format with ABINIT header (.fhi files)
 		Uspp, //!< USPP format ultrasoft pseudopotential
+		PAWxml, //!< PAW-XML atomic datasets (JTH)
 		UPF //!< Quantum Espresso's Universal Pseudopotential Format (the XML version 2 only)
 	};
 	//! Returns the pseudopotential format
@@ -262,6 +274,7 @@ private:
 	void setCore(RadialFunctionR&); //!< Generate nCoreRadial and tauCoreRadial if required (in SpeciesInfo_core.cpp)
 	void readFhi(istream&); // Implemented in SpeciesInfo_readFhi.cpp
 	void readUspp(istream&); //Implemented in SpeciesInfo_readUspp.cpp
+	void readPAW(istream&); //Implemented in SpeciesInfo_PAW.cpp
 	void readUPF(istream&); //Implemented in SpeciesInfo_readUPF.cpp
 	void setupPulay();
 	void setPsi(std::vector<std::vector<RadialFunctionR> >& psi); //!< Normalize, transform from real space and set psiRadial, OpsiRadial (for ultrasoft psps, call after setting Qint)

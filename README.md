@@ -11,6 +11,9 @@ This version of [JDFTx](https://github.com/shankar1729/jdftx) provides:
   solver, symmetry and cache optimizations.
 - Occupied-state Berry-phase bulk polarization and self-consistent finite-field
   dielectric tensors, with ionic and unit-cell relaxation.
+- Experimental native JTH PAW-XML support for fixed-ion, unpolarized PBE,
+  including all-electron valence reconstruction and Wannier matrix elements.
+  See the [PAW guide and examples](examples/paw/README.md).
 - CPU and CUDA executables in one shared build directory.
 - Truncated density-convolution Wannier localization for entangled bands and
   hard center constraints on all or selected trial-orbital positions.
@@ -22,6 +25,7 @@ in the relevant sections.
 ## Contents
 
 - [Build](#build)
+- [PAW datasets, cutoffs and all-electron output](#paw-datasets-cutoffs-and-all-electron-output)
 - [Wannier localization and fixed centers](#wannier-localization-and-fixed-centers)
 - [KI and original PBE band comparison](#ki-and-original-pbe-band-comparison)
   - [Coarse-grid screening workflow](#coarse-grid-screening-workflow)
@@ -45,6 +49,7 @@ in the relevant sections.
 
 | Command | Executable |
 |---|---|
+| [`paw-reconstruction-cutoff`](#paw-datasets-cutoffs-and-all-electron-output) | `jdftx` / `jdftx_gpu` |
 | [`berry-phase-field`](#berry-phase-bulk-polarization-and-static-dielectric-response) | `jdftx` / `jdftx_gpu` |
 | [`berry-phase-branch`](#berry-phase-bulk-polarization-and-static-dielectric-response) | `jdftx` / `jdftx_gpu` |
 | [`defect-coulomb`](#defect-coulomb) | `jdftx` / `jdftx_gpu` |
@@ -86,7 +91,7 @@ launching a program or choosing MPI ranks remains a separate shell operation.
 
 ## Build
 
-Install the normal JDFTx dependencies: C++ compiler, CMake, GSL, FFTW,
+Install the normal JDFTx dependencies: C++ compiler, CMake, GSL, FFTW, libxml2,
 BLAS/LAPACK and MPI. The supplied shared-build presets also require CUDA 12
 at `/usr/local/cuda-12` and select CUDA architecture 89 for the RTX 4090s in
 this workspace. Adjust the CUDA toolkit path and architecture for other
@@ -153,6 +158,59 @@ libraries under `share/jdftx/pseudopotentials`.
 
 Python 3 is needed for utility wrappers and regression scripts; band and
 phonon plotting dependencies are listed with their workflows.
+
+## PAW datasets, cutoffs and all-electron output
+
+The experimental PAW implementation supports fixed-ion, unpolarized PBE in
+`jdftx` and `jdftx_gpu`, with PAW overlap and momentum corrections in `wannier`
+and `wannier_gpu`. Supply the full-resolution PBE atomic datasets from the
+[JTH library](https://www.abinit.org/atomic_data/paw/), extract them locally, and
+reconfigure CMake. Set `PAW_JTH_DIR` if the extracted files are outside the
+default `pseudopotentials/JTH-v2.0-GGA-PBE-atomicdata-xml` directory. The build
+prepares and installs the usual wildcard aliases:
+
+```text
+ion-species PAW/$ID_PBE.xml
+```
+
+For Zr, start at **20 Ha** for the smooth wavefunctions and check 15, 20, 25,
+and 30 Ha while keeping the density cutoff fixed at 120 Ha:
+
+```text
+elec-cutoff 20 120
+```
+
+The first number is the wavefunction cutoff; the second is the density cutoff.
+JDFTx requires the density cutoff to be at least four times the wavefunction
+cutoff and uses that minimum when the second number is omitted. Holding it
+fixed during the sweep isolates wavefunction-basis convergence. Check the
+target band energies, momentum matrix elements, and total-energy differences,
+then converge the density cutoff separately. Keeping the SG15 wavefunction
+cutoff of 30 Ha is also a reasonable initial reference calculation.
+
+The supplied Zr XML file recommends 12 Ha, while other elements can need more
+(for example, H recommends 25 Ha and Na 40 Ha). Dataset recommendations guide
+the starting point; final settings need material-specific convergence checks.
+For compounds, account for the most demanding constituent. The
+[JTH validation](https://www.abinit.org/atomic_data/paw/) used a 20 Ha cutoff;
+its results do not establish convergence for every system in this implementation.
+
+All-electron valence reconstruction has an independent export cutoff:
+
+```text
+dump End BandEigs AEWfns AEMatrices
+paw-reconstruction-cutoff 200
+```
+
+Converge this export cutoff separately when using the reconstructed Fourier
+coefficients. It controls the resolution of the exported wavefunctions;
+`elec-cutoff` controls the smooth SCF basis and density grid. `AEMatrices`
+exports the analytic PAW overlap, Hamiltonian, and canonical momentum matrices.
+The PAW transformation preserves the valence eigenvalues. Frozen-core orbital
+eigenstates, spin/SOC, ionic forces, stress, relaxation, and DFPT are currently
+unsupported. See the [PAW guide and runnable examples](examples/paw/README.md)
+and [validation record](examples/paw/VALIDATION.md) for the complete scope,
+restart workflow, binary formats, and measured errors.
 
 ## Wannier localization and fixed centers
 

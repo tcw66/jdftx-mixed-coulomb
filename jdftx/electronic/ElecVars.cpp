@@ -25,6 +25,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include <electronic/ColumnBundle.h>
 #include <electronic/ExCorr.h>
 #include <electronic/ExactExchange.h>
+#include <electronic/PAW.h>
 #include <fluid/FluidSolver.h>
 #include <core/matrix.h>
 #include <core/Units.h>
@@ -162,6 +163,13 @@ void ElecVars::setup(const Everything &everything)
 	//Read in electron (spin) density if needed
 	if(e->cntrl.fixed_H)
 	{	string fnamePattern = nFilenamePattern.length() ? nFilenamePattern : VFilenamePattern; //Command ensures that the pattern has a "$VAR" in it
+		bool hasPAW = false;
+		for(auto sp: iInfo.species) hasPAW |= sp->isPAW();
+		if(hasPAW)
+		{	string pawFile = fnamePattern;
+			pawFile.replace(pawFile.find("$VAR"), 4, "pawState");
+			iInfo.readPAWState(pawFile);
+		}
 		#define READrhoAtom(var) \
 		{	string fname = fnamePattern; \
 			size_t pos = fname.find("$VAR"); \
@@ -343,6 +351,8 @@ void ElecVars::EdensityAndVscloc(Energies& ener, const ExCorr* alternateExCorr)
 	// Exchange and correlation, and store the real space Vscloc with the odd historic normalization factor of JdagOJ:
 	const ExCorr& exCorr = alternateExCorr ? *alternateExCorr : e->exCorr;
 	ener.E["Exc"] = exCorr(get_nXC(), &Vxc, false, &tau, &Vtau);
+	ener.E["EPAW"] = 0.;
+	for(auto sp: e->iInfo.species) ener.E["EPAW"] += sp->pawEnergyAndPotential(exCorr);
 	
 	if(not (exCorr.hasEnergy() or e->cntrl.scf or e->cntrl.fixed_H))
 		die("Potential functionals do not support total-energy minimization; use SCF or fixed-H calculations instead.\n")
@@ -648,9 +658,13 @@ ScalarFieldArray ElecVars::calcDensity() const
 {	ScalarFieldArray density(n.size()); nullToZero(density, e->gInfo);
 	//Runs over all states and accumulates density to the corresponding spin channel of the total density
 	e->iInfo.augmentDensityInit();
+	for(auto sp: e->iInfo.species) if(sp->paw)
+		for(matrix& r: sp->paw->rho) r.zero();
 	for(int q=e->eInfo.qStart; q<e->eInfo.qStop; q++)
 	{	density += e->eInfo.qnums[q].weight * diagouterI(F[q], C[q], density.size(), &e->gInfo);
 		e->iInfo.augmentDensitySpherical(e->eInfo.qnums[q], F[q], VdagC[q]); //pseudopotential contribution
+		for(size_t sp=0; sp<e->iInfo.species.size(); sp++)
+			e->iInfo.species[sp]->pawAccumulateDensity(e->eInfo.qnums[q], F[q], VdagC[q][sp]);
 	}
 	e->iInfo.augmentDensityGrid(density);
 	for(ScalarField& ns: density)
@@ -658,6 +672,7 @@ ScalarFieldArray ElecVars::calcDensity() const
 		ns->allReduceData(mpiWorld, MPIUtil::ReduceSum);
 	}
 	e->symm.symmetrize(density);
+	for(auto sp: e->iInfo.species) sp->pawSymmetrizeDensity();
 	return density;
 }
 

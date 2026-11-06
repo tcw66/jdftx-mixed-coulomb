@@ -115,6 +115,8 @@ EnumStringMap<DumpVariable> varMap
 	DumpOcean, "Ocean",
 	DumpBGW, "BGW",
 	DumpRealSpaceWfns, "RealSpaceWfns",
+	DumpAEWfns, "AEWfns",
+	DumpAEMatrices, "AEMatrices",
 	DumpFluidDebug, "FluidDebug",
 	DumpSlabEpsilon, "SlabEpsilon",
 	DumpBulkEpsilon, "BulkEpsilon",
@@ -179,6 +181,8 @@ EnumStringMap<DumpVariable> varDescMap
 	DumpQMC,            "Blip'd orbitals and potential for CASINO \\cite Katie-QMC",
 	DumpOcean,          "Wave functions for Ocean code",
 	DumpBGW,            "G-space wavefunctions, density and potential for Berkeley GW (requires HDF5 support)",
+	DumpAEWfns, "PAW reconstructed valence Bloch coefficients (see paw-reconstruction-cutoff)",
+	DumpAEMatrices, "PAW all-electron valence overlap, Hamiltonian, and canonical momentum matrices",
 	DumpRealSpaceWfns,  "Real-space wavefunctions (one column per file)",
 	DumpExcCompare,     "Energies for other exchange-correlation functionals (see command elec-ex-corr-compare)",
 	DumpFluidDebug,     "Fluid specific debug output if any ",
@@ -1188,3 +1192,20 @@ struct CommandCprimeParams : public Command
 	}
 }
 commandCprimeParams;
+
+
+struct CommandPAWReconstructionCutoff : public Command
+{
+ CommandPAWReconstructionCutoff() : Command("paw-reconstruction-cutoff", "jdftx/Output")
+ {
+  format="<Ecut>";
+  comments="Plane-wave cutoff in Hartree for dump AEWfns. Defaults to four times elec-cutoff. "
+   "Reconstructed wavefunctions are projections of T|psi> at this cutoff, without renormalization. "
+   "Converge this cutoff separately from the smooth wavefunction cutoff.";
+ }
+ void process(ParamList& pl,Everything& e) {
+  pl.get(e.dump.pawReconstructionCutoff,0.,"Ecut",true);
+  if(!std::isfinite(e.dump.pawReconstructionCutoff) || e.dump.pawReconstructionCutoff<=0.) throw string("Ecut must be finite and positive");
+ }
+ void printStatus(Everything& e,int) { logPrintf("%g",e.dump.pawReconstructionCutoff); }
+} commandPAWReconstructionCutoff;

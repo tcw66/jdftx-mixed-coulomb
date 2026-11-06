@@ -15,6 +15,20 @@ add_custom_command(OUTPUT ${libraryOutputs}
  VERBATIM)
 add_custom_target(PseudopotentialLibrary ALL DEPENDS ${libraryOutputs})
 
+# Keep the ordinary ion-species wildcard syntax for native PAW datasets:
+# PAW/$ID_PBE.xml resolves through the same build/install prefixes as SG15/GBRV.
+# COPYONLY preserves dataset fingerprints and makes installed files standalone.
+file(GLOB pawDatasets CONFIGURE_DEPENDS "${PAW_JTH_DIR}/*.GGA_PBE-JTH*.xml")
+foreach(dataset IN LISTS pawDatasets)
+ get_filename_component(datasetName "${dataset}" NAME)
+ string(REPLACE ".GGA_PBE-JTH" "_PBE" libraryName "${datasetName}")
+ configure_file("${dataset}" "${CMAKE_CURRENT_BINARY_DIR}/PAW/${libraryName}" COPYONLY)
+endforeach()
+if(pawDatasets)
+ install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/PAW"
+  DESTINATION share/jdftx/pseudopotentials)
+endif()
+
 foreach(executable IN ITEMS jdftx wannier phonon ConstructDefectPotential
  jdftx_gpu wannier_gpu phonon_gpu ConstructDefectPotential_gpu)
  if(TARGET ${executable})

@@ -54,6 +54,7 @@ enum DumpVariable { DumpNone, DumpState, //None or exactly those required to res
 	DumpMomenta, DumpVelocities, DumpFermiVelocity, DumpR, DumpL, DumpQ, DumpBerry,
 	DumpSymmetries, DumpKpoints, DumpGvectors, DumpOrbitalDep, DumpXCanalysis, DumpEresolvedDensity, DumpFermiDensity,
 	DumpDWfns, DumpDn, DumpDVext, DumpDVscloc, DumpHC,
+	DumpAEWfns, DumpAEMatrices, // PAW reconstructed valence wavefunctions and physical matrix elements
 	DumpDefectReference, DumpDefectCoulomb, // clean reference and mixed-boundary diagnostics
 	DumpDelim //special value used as a delimiter during command processing
 };
@@ -87,15 +88,18 @@ public:
 	std::shared_ptr<struct BGWparams> bgwParams; //!< parameters for BGW calculation, if any
 	std::shared_ptr<struct DumpCprime> dumpCprime; //!< dC/dk calculator, if needed
 	bool potentialSubtraction; //!< whether to subtract neutral-atom potentials in Dvac and Dtot output
+	double pawReconstructionCutoff=0.; //!< output cutoff in Hartree (zero: 4 times smooth wavefunction cutoff)
 	bool bandProjectionOrtho, bandProjectionNorm; //!< whether band projections use ortho-orbitals and are complex/norm-only
 	matrix3<int> Munfold; //!< transformation matrix for band structure unfolding
 private:
+	void dumpPAW(bool wavefunctions, bool matrices) const;
 	const Everything* e;
 	string format; //!< Filename format containing $VAR, $STAMP, $FREQ etc.
 	string stamp; //!< timestamp for current dump
 	int curIter; DumpFrequency curFreq; //!< iteration number and dump-frequency of most recent operator() call
 	std::map<DumpFrequency,int> interval; //!< for each frequency, dump every interval times
 	std::map<DumpFrequency,string> formatFreq; //!< frequency-dependent format override
+	friend struct CommandPAWReconstructionCutoff;
 	friend class Phonon;
 	friend class DefectSupercell;
 	friend struct CommandDump;

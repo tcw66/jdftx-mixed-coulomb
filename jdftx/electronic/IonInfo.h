@@ -125,6 +125,9 @@ public:
 	void rhoAtom_forces(const std::vector<diagMatrix>& F, const std::vector<ColumnBundle>& C, const std::vector<matrix>& U_rhoAtom,
 		IonicGradient& forces, matrix3<>* EU_RRT) const; //!< propagate U_rhoAtom to forces (and optionally stress)
 	
+	void writePAWState(const string& filename) const; //!< serialize on-site densities and Hamiltonians
+	void readPAWState(const string& filename) const; //!< read and validate fixed-H state
+	matrix allElectronMomentum(const ColumnBundle&, int direction) const; //!< canonical PAW momentum, including on-site AE correction
 	//! Expectation value of [r_iDir,H] = D_iDir + nonlocal corrections
 	matrix rHcommutator(const ColumnBundle &Y, int iDir, const matrix& YdagHY) const; 
 

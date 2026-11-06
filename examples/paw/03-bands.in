@@ -1,0 +1,13 @@
+include common.in
+
+fix-electron-density results/Si.$VAR
+# Reads results/Si.n AND results/Si.pawState; no SCF wavefunction mesh is required.
+kpoint 0 0 0 1
+kpoint 0.125 0.125 0 1
+kpoint 0.25 0.25 0 1
+kpoint 0.375 0.375 0 1
+kpoint 0.5 0.5 0 1
+electronic-minimize nIterations 100 energyDiffThreshold 1e-10
+dump-name results/bands.$VAR
+dump End BandEigs AEMatrices AEWfns
+paw-reconstruction-cutoff 100

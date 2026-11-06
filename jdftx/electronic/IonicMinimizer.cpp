@@ -304,7 +304,14 @@ double IonicMinimizer::compute(IonicGradient* grad, IonicGradient* Kgrad)
 		elecFluidMinimize(e);
 	
 	//Calculate forces if needed:
-	if(grad)
+	bool hasPAW = false;
+	for(auto sp: e.iInfo.species) hasPAW |= sp->isPAW();
+	if(grad && hasPAW) //Fixed-ion calculations only; PAW rejects ionic optimization at setup.
+	{	e.iInfo.forces.init(e.iInfo);
+		*grad = e.iInfo.forces;
+		if(Kgrad) *Kgrad = *grad;
+	}
+	if(grad && !hasPAW)
 	{	e.iInfo.ionicEnergyAndGrad(); //compute forces in lattice coordinates
 		*grad = -e.gInfo.invRT * e.iInfo.forces; //gradient in cartesian coordinates (and negative of force)
 		
@@ -334,7 +341,10 @@ bool IonicMinimizer::report(int iter)
 	}
 	logPrintf("\n"); 
 	e.iInfo.printPositions(globalLog);
-	e.iInfo.forces.print(e, globalLog);
+	bool hasPAW = false;
+	for(auto sp: e.iInfo.species) hasPAW |= sp->isPAW();
+	if(hasPAW) logPrintf("# PAW forces are unavailable in this fixed-ion implementation.\n");
+	else e.iInfo.forces.print(e, globalLog);
 	logPrintf("# Energy components:\n"); e.ener.print(); logPrintf("\n");
 	e.dump(DumpFreq_Ionic, iter);
 	populationAnalysisPending = true; //population analysis will be performed the next time step() is called

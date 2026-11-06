@@ -146,6 +146,11 @@ void Dump::operator()(DumpFrequency freq, int iter)
 		for(int q=eInfo.qStart; q<eInfo.qStop; q++) ((ElecVars&)eVars).F[q] *= wInv;
 	}
 	
+	if(ShouldDump(State) || ShouldDump(ElecDensity) || ShouldDump(Vscloc))
+	{	bool hasPAW = false;
+		for(auto sp: iInfo.species) hasPAW |= sp->isPAW();
+		if(hasPAW) iInfo.writePAWState(getFilename("pawState"));
+	}
 	if(ShouldDump(State))
 	{
 		//Dump wave functions
@@ -285,6 +290,10 @@ void Dump::operator()(DumpFrequency freq, int iter)
 	if(ShouldDump(Vscloc) and e->exCorr.needsKEdensity())
 		DUMP_spinCollection(eVars.Vtau, "Vtau")
 	
+	if(ShouldDump(AEWfns) || ShouldDump(AEMatrices))
+	{	if(!isCevec) die("AEWfns and AEMatrices require eigenstate wavefunctions (dump End).\n");
+		dumpPAW(ShouldDump(AEWfns), ShouldDump(AEMatrices));
+	}
 	if(ShouldDump(BandEigs) ||
 		(ShouldDump(State) &&
 			( (eInfo.fillingsUpdate == ElecInfo::FillingsHsub)

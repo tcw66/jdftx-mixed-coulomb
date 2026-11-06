@@ -1,0 +1,6 @@
+include common.in
+kpoint-folding 8 8 8
+electronic-scf nIterations 60 energyDiffThreshold 1e-9 eigDiffThreshold 1e-7
+dump-name results/Si.$VAR
+dump End State ElecDensity Vscloc BandEigs AEWfns AEMatrices
+paw-reconstruction-cutoff 200

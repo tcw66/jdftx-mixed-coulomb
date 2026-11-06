@@ -32,6 +32,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 struct SCFvariable
 {	ScalarFieldArray n; //!< electron density (or potential)
 	ScalarFieldArray tau; //!< KE density (or potential) [mGGA only]
+	std::vector<matrix> pawMatrices; //!< PAW one-center densities or potentials
 	std::vector<matrix> rhoAtom; //!< atomic density matrices (or corresponding potential) [DFT+U only]
 };
 

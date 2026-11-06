@@ -1,0 +1,7 @@
+# CMake prepares the PAW library in the standard pseudopotential search path.
+ion-species PAW/$ID_PBE.xml
+lattice Face-Centered Cubic 10.26
+ion Si 0 0 0 0
+ion Si 0.25 0.25 0.25 0
+elec-cutoff 20 120
+elec-n-bands 20

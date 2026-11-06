@@ -204,7 +204,7 @@ void SpeciesInfo::readUPF(istream& is)
 			//Check for unsupported types:
 			string isPaw = tag.getAttribute("is_paw");
 			if(isPaw == "T" or isPaw == "true")
-				die("  PAW datasets are not yet supported.\n");
+				die("  PAW UPF datasets are not supported; use a PAW-XML (.xml) dataset.\n");
 			//Valence properties:
 			Z = atof(tag.getAttribute("z_valence").c_str());
 			lMax = atoi(tag.getAttribute("l_max").c_str());

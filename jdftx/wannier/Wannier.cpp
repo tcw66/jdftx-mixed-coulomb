@@ -38,6 +38,8 @@ Wannier::Wannier() : needAtomicOrbitals(false),
 void Wannier::setup(const Everything& everything)
 {	e = &everything;
 	logPrintf("\n---------- Initializing Wannier Function solver ----------\n");
+	for(auto sp: e->iInfo.species) if(sp->isPAW() && localizationMeasure==LM_RealSpace)
+		die("PAW Wannierization requires FiniteDifference or TruncatedDC localization; RealSpace lacks augmentation.\n");
 	if(koopmans)
 	{
 		Citations::add("Periodic Koopmans spectral functionals",

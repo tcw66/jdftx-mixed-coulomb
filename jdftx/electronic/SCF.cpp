@@ -18,6 +18,7 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 -------------------------------------------------------------------*/
 
 #include <electronic/SCF.h>
+#include <electronic/PAW.h>
 #include <electronic/DefectCoulomb.h>
 #include <electronic/ElecMinimizer.h>
 #include <electronic/Everything.h>
@@ -131,6 +132,11 @@ void SCF::minimize()
 	
 	//Set auxiliary Hamiltonian equal to subspace Hamiltonian (used for fillings updates)
 	if(e.eInfo.fillingsUpdate == ElecInfo::FillingsHsub) eVars.Haux_eigs = eVars.Hsub_eigs;
+	// Restore both PAW density variables from the final occupied orbitals after
+	// the final mixer extrapolation, before energies or restart files are used.
+	bool hasPAW = false;
+	for(auto sp: e.iInfo.species) hasPAW |= sp->isPAW();
+	if(hasPAW) eVars.elecEnergyAndGrad(e.ener, 0, 0, true);
 }
 
 double SCF::sync(double x) const
@@ -194,6 +200,11 @@ void SCF::axpy(double alpha, const SCFvariable& X, SCFvariable& Y) const
 		for(size_t i=0; i<X.rhoAtom.size(); i++)
 			::axpy(alpha, X.rhoAtom[i], Y.rhoAtom[i]);
 	}
+	if(Y.pawMatrices.empty())
+		for(const matrix& r: X.pawMatrices)
+			Y.pawMatrices.push_back(zeroes(r.nRows(), r.nCols()));
+	for(size_t i=0; i<X.pawMatrices.size(); i++)
+		::axpy(alpha, X.pawMatrices[i], Y.pawMatrices[i]);
 }
 
 double SCF::dot(const SCFvariable& X, const SCFvariable& Y) const
@@ -208,6 +219,8 @@ double SCF::dot(const SCFvariable& X, const SCFvariable& Y) const
 	{	for(size_t i=0; i<X.rhoAtom.size(); i++)
 			ret += dotc(X.rhoAtom[i],Y.rhoAtom[i]).real();
 	}
+	for(size_t i=0; i<X.pawMatrices.size(); i++)
+		ret += dotc(X.pawMatrices[i], Y.pawMatrices[i]).real();
 	return ret;
 }
 
@@ -218,6 +231,8 @@ size_t SCF::variableSize() const
 		e.iInfo.rhoAtom_initZero(rhoAtom);
 		for(const matrix& m: rhoAtom) nDoubles += 2*m.nData();
 	}
+	for(auto sp: e.iInfo.species) if(sp->paw)
+		for(const matrix& r: sp->paw->rho) nDoubles += 2*r.nData();
 	return nDoubles * sizeof(double);
 }
 
@@ -235,6 +250,13 @@ void SCF::readVariable(SCFvariable& v, FILE* fp) const
 	{	e.iInfo.rhoAtom_initZero(v.rhoAtom);
 		for(matrix& m: v.rhoAtom) m.read(fp);
 	}
+	v.pawMatrices.clear();
+	for(auto sp: e.iInfo.species) if(sp->paw)
+		for(const matrix& r: sp->paw->rho)
+		{	matrix x = zeroes(r.nRows(), r.nCols());
+			x.read(fp);
+			v.pawMatrices.push_back(x);
+		}
 }
 
 void SCF::writeVariable(const SCFvariable& v, FILE* fp) const
@@ -248,6 +270,7 @@ void SCF::writeVariable(const SCFvariable& v, FILE* fp) const
 	if(e.eInfo.hasU)
 	{	for(const matrix& m: v.rhoAtom) m.write(fp);
 	}
+	for(const matrix& r: v.pawMatrices) r.write(fp);
 }
 
 namespace Magnetization
@@ -295,6 +318,9 @@ SCFvariable SCF::getVariable() const
 	//Atomic density matrices:
 	if(e.eInfo.hasU)
 		v.rhoAtom = (mixDensity ? e.eVars.rhoAtom : e.eVars.U_rhoAtom);
+	for(auto sp: e.iInfo.species) if(sp->paw)
+		for(const matrix& r: (mixDensity ? sp->paw->rho : sp->paw->potential))
+			v.pawMatrices.push_back(r);
 	return v;
 }
 
@@ -308,6 +334,10 @@ void SCF::setVariable(const SCFvariable& v)
 	//Atomic density matrices:
 	if(e.eInfo.hasU)
 		(mixDensity ? e.eVars.rhoAtom : e.eVars.U_rhoAtom) = v.rhoAtom;
+	size_t ipaw = 0;
+	for(auto sp: e.iInfo.species) if(sp->paw)
+		for(matrix& r: (mixDensity ? sp->paw->rho : sp->paw->potential))
+			r = v.pawMatrices.at(ipaw++);
 	//Update precomputed quantities of one-particle Hamiltonian:
 	if(mixDensity) e.eVars.EdensityAndVscloc(e.ener); //Recompute Vscloc (Vtau) if mixing density
 	e.iInfo.augmentDensityGridGrad(e.eVars.Vscloc); //update Vscloc atom projections for ultrasoft psp's 
@@ -332,6 +362,8 @@ SCFvariable SCF::precondition(const SCFvariable& v) const
 		for(matrix& m: vOut.rhoAtom)
 			m *= e.scfParams.mixFraction;
 	}
+	vOut.pawMatrices = v.pawMatrices;
+	for(matrix& r: vOut.pawMatrices) r *= e.scfParams.mixFraction;
 	return vOut;
 }
 
@@ -345,6 +377,7 @@ SCFvariable SCF::applyMetric(const SCFvariable& v) const
 	//Atomic density matrices:
 	if(e.eInfo.hasU)
 		vOut.rhoAtom = v.rhoAtom;
+	vOut.pawMatrices = v.pawMatrices;
 	return vOut;
 }
 

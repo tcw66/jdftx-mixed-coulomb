@@ -240,6 +240,11 @@ else()
 	set(LINK_TYPE SHARED)
 endif()
 
+# Native PAW-XML uses libxml2 for strict, non-network XML parsing.
+find_package(LibXml2 REQUIRED)
+include_directories(${LIBXML2_INCLUDE_DIR})
+list(APPEND EXTERNAL_LIBS ${LIBXML2_LIBRARIES})
+
 #Library with all the functionality:
 FILE(GLOB jdftxlibSources core/*.cpp fluid/*.cpp electronic/*.cpp perturb/*.cpp commands/*.cpp)
 add_library(jdftxlib ${LINK_TYPE} ${jdftxlibSources})
@@ -356,6 +361,9 @@ if(DOXYGEN_FOUND)
 		DEPENDS jdftx wannier phonon
 	)
 endif()
+
+#Optional local JTH library, shared by PAW packaging and regression tests.
+set(PAW_JTH_DIR "${CMAKE_SOURCE_DIR}/../pseudopotentials/JTH-v2.0-GGA-PBE-atomicdata-xml" CACHE PATH "JTH PAW XML dataset directory")
 
 #Tests
 enable_testing()

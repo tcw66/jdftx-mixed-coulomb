@@ -376,6 +376,7 @@ matrix WannierMinimizer::overlap(const ColumnBundle& C1, const ColumnBundle& C2,
 			}
 			i1 += nSpinor;
 		}
+		if(sp.isPAW()) Qk=sp.pawOverlap(dkVec); // true AE-minus-PS overlap, not compensation charge
 		if(sp.isRelativistic()) Qk = sp.fljAll * Qk * sp.fljAll;
 		//Phases for each atom:
 		std::vector<complex> phaseArr;

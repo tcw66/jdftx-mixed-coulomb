@@ -325,7 +325,13 @@ void WannierMinimizer::saveMLWF_P(int iSpin, const matrix& phase)
 	for(int q=e.eInfo.qStart; q<e.eInfo.qStop; q++)
 		if(e.eInfo.qnums[q].index()==iSpin)
 			for(int iDir=0; iDir<3; iDir++)
-				pBloch[q][iDir] = e.iInfo.rHcommutator(e.eVars.C[q], iDir, e.eVars.Hsub_eigs[q]); //note factor of -iota dropped to make it real (and anti-symmetric)
+				{	bool hasPAW = false;
+					for(auto sp: e.iInfo.species) hasPAW |= sp->isPAW();
+					// Store i*p so real Wannier functions give real, antisymmetric matrices.
+					pBloch[q][iDir] = hasPAW
+						? complex(0.,1.) * e.iInfo.allElectronMomentum(e.eVars.C[q], iDir)
+						: e.iInfo.rHcommutator(e.eVars.C[q], iDir, e.eVars.Hsub_eigs[q]);
+				}
 	//Convert to Wannier basis:
 	matrix pWannierTilde = zeroes(nCenters*nCenters*3, phase.nRows());
 	int iqMine = 0;
