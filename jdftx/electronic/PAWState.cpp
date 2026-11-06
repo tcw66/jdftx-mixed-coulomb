@@ -86,8 +86,15 @@ void IonInfo::readPAWState(const string &filename) const
 			for (size_t a = 0; a < atoms; a++)
 			{
 				for (int k = 0; k < 3; k++)
-					if (fabs(real() - sp->atpos[a][k]) > 1e-10)
-						die("PAW state atomic position mismatch.\n");
+				{
+					double saved = real(), current = sp->atpos[a][k];
+					if (fabs(saved - current) > 1e-10)
+						die("PAW state atomic position mismatch for %s atom %zu, lattice component %d: "
+						    "saved %.17g, current %.17g.\nUse the exact SCF geometry for fixed-H PAW "
+						    "restarts; "
+						    "symmetry may have adjusted rounded input positions.\n",
+						    sp->name.c_str(), a, k, saved, current);
+				}
 				for (matrix *mat : {&p.rho[a], &p.potential[a]})
 				{
 					for (size_t i = 0; i < mat->nData(); i++)

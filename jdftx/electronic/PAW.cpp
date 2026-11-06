@@ -1,5 +1,6 @@
 /* See PAW.h for license. Hartree atomic units throughout. */
 #include <electronic/PAW.h>
+#include <electronic/PAW_internal.h>
 #include <electronic/ExCorr.h>
 #include <core/SphericalHarmonics.h>
 #include <libxml/parser.h>
@@ -7,6 +8,96 @@
 #include <sstream>
 #include <stdexcept>
 #include <memory>
+#ifdef GPU_ENABLED
+// Only density multipoles and integrated derivatives cross the CPU/GPU boundary.
+// The much larger angular arrays remain on the device between calls.
+struct PAWQuadrature
+{
+	ManagedArray<double> inverseR, radialWeight, angularWeight, harmonics;
+	ManagedArray<vector3<>> directions, harmonicGrad;
+	ManagedArray<double> density, densityDerivative, n, sigma, energy, energyN, energySigma, a, b, c;
+	ManagedArray<vector3<>> gradient;
+	std::vector<double> hostDensity, hostDerivative;
+	PAWQuadrature(const RadialFunctionR &grid, const std::vector<double> &weights,
+	              const std::vector<vector3<>> &dirs, const std::vector<std::vector<double>> &y,
+	              const std::vector<std::vector<vector3<>>> &dy)
+	{
+		size_t nr = grid.r.size(), nlm = y.size(), na = dirs.size();
+		std::vector<double> inv(nr), radial(nr), flatY(nlm * na);
+		std::vector<vector3<>> flatDY(nlm * na);
+		for (size_t r = 0; r < nr; r++)
+		{
+			inv[r] = grid.r[r] ? 1. / grid.r[r] : 0.;
+			radial[r] = grid.dr[r] * grid.r[r] * grid.r[r];
+		}
+		for (size_t lm = 0; lm < nlm; lm++)
+			for (size_t k = 0; k < na; k++)
+			{
+				flatY[lm * na + k] = y[lm][k];
+				flatDY[lm * na + k] = dy[lm][k];
+			}
+		inverseR = ManagedArray<double>(inv);
+		radialWeight = ManagedArray<double>(radial);
+		angularWeight = ManagedArray<double>(weights);
+		directions = ManagedArray<vector3<>>(dirs);
+		harmonics = ManagedArray<double>(flatY);
+		harmonicGrad = ManagedArray<vector3<>>(flatDY);
+		size_t points = (nr - 1) * na;
+		for (auto *array : {&n, &sigma, &energy, &energyN, &energySigma})
+			array->init(points, true);
+		gradient.init(points, true);
+		for (auto *array : {&density, &densityDerivative, &a, &b, &c})
+			array->init(nr * nlm, true);
+		hostDensity.resize(nr * nlm);
+		hostDerivative.resize(nr * nlm);
+	}
+	double evaluate(const std::vector<std::vector<double>> &nLM, const std::vector<std::vector<double>> &dnLM,
+	                std::vector<std::vector<double>> &outA, std::vector<std::vector<double>> &outB,
+	                std::vector<std::vector<double>> &outC)
+	{
+		int nr = nLM[0].size(), nlm = nLM.size(), na = angularWeight.nData();
+		for (int lm = 0; lm < nlm; lm++)
+		{
+			std::copy(nLM[lm].begin(), nLM[lm].end(), hostDensity.begin() + lm * nr);
+			std::copy(dnLM[lm].begin(), dnLM[lm].end(), hostDerivative.begin() + lm * nr);
+		}
+		cudaMemcpy(density.dataGpu(), hostDensity.data(), hostDensity.size() * sizeof(double),
+		           cudaMemcpyHostToDevice);
+		cudaMemcpy(densityDerivative.dataGpu(), hostDerivative.data(), hostDerivative.size() * sizeof(double),
+		           cudaMemcpyHostToDevice);
+		PAWXCView view = {nr,
+		                  nlm,
+		                  na,
+		                  inverseR.dataGpu(),
+		                  radialWeight.dataGpu(),
+		                  angularWeight.dataGpu(),
+		                  harmonics.dataGpu(),
+		                  directions.dataGpu(),
+		                  harmonicGrad.dataGpu(),
+		                  density.dataGpu(),
+		                  densityDerivative.dataGpu(),
+		                  n.dataGpu(),
+		                  sigma.dataGpu(),
+		                  energy.dataGpu(),
+		                  energyN.dataGpu(),
+		                  energySigma.dataGpu(),
+		                  gradient.dataGpu(),
+		                  a.dataGpu(),
+		                  b.dataGpu(),
+		                  c.dataGpu()};
+		double result = pawXC_gpu(view);
+		const double *pa = a.data(), *pb = b.data(), *pc = c.data();
+		for (int lm = 0; lm < nlm; lm++)
+		{
+			std::copy(pa + lm * nr, pa + (lm + 1) * nr, outA[lm].begin());
+			std::copy(pb + lm * nr, pb + (lm + 1) * nr, outB[lm].begin());
+			std::copy(pc + lm * nr, pc + (lm + 1) * nr, outC[lm].begin());
+		}
+		return result;
+	}
+};
+#endif
+
 namespace
 {
 std::string attr(xmlNode *node, const char *key, bool required = true)
@@ -474,7 +565,9 @@ matrix PAW::phaseMatrix(const matrix &physical, bool inverse) const
 
 double PAW::energyAndPotential(const matrix &density, const ExCorr &xc, matrix &grad) const
 {
-	const size_t nr = grid.r.size(), nlm = harmonics.size(), na = directions.size();
+	if (!xc.supportsPAW())
+		die("PAW one-center XC requires internal PBE.\n");
+	const size_t nr = grid.r.size(), nlm = harmonics.size();
 	const double sqrt4pi = sqrt(4 * M_PI);
 	typedef std::vector<double> Vec;
 	typedef std::vector<Vec> Multipoles;
@@ -551,34 +644,52 @@ double PAW::energyAndPotential(const matrix &density, const ExCorr &xc, matrix &
 		Multipoles dnLM(nlm);
 		for (size_t lm = 0; lm < nlm; lm++)
 			dnLM[lm] = derivative(nLM[lm]);
-		Vec n(na), sigma(na), exc(na), en(na), es(na);
-		std::vector<vector3<>> gn(na);
 		Multipoles a(nlm, Vec(nr)), b = a, c = a;
-		for (size_t r = 1; r < nr; r++)
+#ifdef GPU_ENABLED
+		if (!quadrature)
+			quadrature =
+			    std::make_shared<PAWQuadrature>(grid, angularWeights, directions, harmonics, harmonicGrad);
+		energy += sign * quadrature->evaluate(nLM, dnLM, a, b, c);
+#else
+		// Batch radial shells so PBE launches a few large threaded loops rather
+		// than thousands of tiny ones. Bound the host workspace for heavy atoms.
+		const size_t batchRows = 64, na = directions.size();
+		for (size_t begin = 1; begin < nr; begin += batchRows)
 		{
-			std::fill(n.begin(), n.end(), 0.);
-			std::fill(gn.begin(), gn.end(), vector3<>());
-			for (size_t lm = 0; lm < nlm; lm++)
-				for (size_t k = 0; k < na; k++)
-				{
-					n[k] += nLM[lm][r] * harmonics[lm][k];
-					gn[k] += dnLM[lm][r] * harmonics[lm][k] * directions[k] +
-					         (nLM[lm][r] / grid.r[r]) * harmonicGrad[lm][k];
-				}
-			for (size_t k = 0; k < na; k++)
+			size_t rows = std::min(batchRows, nr - begin), count = rows * na;
+			Vec n(count), sigma(count), exc(count), en(count), es(count);
+			std::vector<vector3<>> gn(count);
+			for (size_t row = 0; row < rows; row++)
+			{
+				size_t r = begin + row, offset = row * na;
+				for (size_t lm = 0; lm < nlm; lm++)
+					for (size_t k = 0; k < na; k++)
+					{
+						n[offset + k] += nLM[lm][r] * harmonics[lm][k];
+						gn[offset + k] += dnLM[lm][r] * harmonics[lm][k] * directions[k] +
+						                  (nLM[lm][r] / grid.r[r]) * harmonicGrad[lm][k];
+					}
+			}
+			for (size_t k = 0; k < count; k++)
 				sigma[k] = gn[k].length_squared();
-			xc.evaluatePAW(na, n.data(), sigma.data(), exc.data(), en.data(), es.data());
-			for (size_t k = 0; k < na; k++)
-				energy += sign * grid.dr[r] * pow(grid.r[r], 2) * angularWeights[k] * exc[k];
-			for (size_t lm = 0; lm < nlm; lm++)
+			xc.evaluatePAW(count, n.data(), sigma.data(), exc.data(), en.data(), es.data());
+			for (size_t row = 0; row < rows; row++)
+			{
+				size_t r = begin + row, offset = row * na;
 				for (size_t k = 0; k < na; k++)
-				{
-					double w = angularWeights[k];
-					a[lm][r] += w * en[k] * harmonics[lm][k];
-					b[lm][r] += w * 2 * es[k] * dot(gn[k], directions[k]) * harmonics[lm][k];
-					c[lm][r] += w * 2 * es[k] * dot(gn[k], harmonicGrad[lm][k]) / grid.r[r];
-				}
+					energy += sign * grid.dr[r] * pow(grid.r[r], 2) * angularWeights[k] * exc[offset + k];
+				for (size_t lm = 0; lm < nlm; lm++)
+					for (size_t k = 0; k < na; k++)
+					{
+						size_t index = offset + k;
+						double w = angularWeights[k];
+						a[lm][r] += w * en[index] * harmonics[lm][k];
+						b[lm][r] += w * 2 * es[index] * dot(gn[index], directions[k]) * harmonics[lm][k];
+						c[lm][r] += w * 2 * es[index] * dot(gn[index], harmonicGrad[lm][k]) / grid.r[r];
+					}
+			}
 		}
+#endif
 		for (const Pair &pair : pairs)
 		{
 			const Vec &f = side ? pair.ps : pair.ae;

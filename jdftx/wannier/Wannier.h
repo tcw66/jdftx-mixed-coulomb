@@ -87,6 +87,8 @@ public:
 	
 	bool saveWfns; //!< whether to write wavefunctions
 	bool saveWfnsRealSpace; //!< whether to output Wannier functions band-by-band in real-space
+	bool saveAEWfns = false; //!< PAW-reconstructed supercell ColumnBundle
+	bool saveAEWfnsRealSpace = false; //!< complex PAW-reconstructed supercell orbitals, one per file
 	bool saveMomenta; //!< whether to output momentum matrix elements
 	bool saveSpin; //!< whether to output spin matrix elements (non-collinear only)
 	bool saveR; //!< whether to output position matrix elements R (short-range Wannier-rotation-matched part)

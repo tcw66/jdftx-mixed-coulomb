@@ -38,6 +38,25 @@ Wannier::Wannier() : needAtomicOrbitals(false),
 void Wannier::setup(const Everything& everything)
 {	e = &everything;
 	logPrintf("\n---------- Initializing Wannier Function solver ----------\n");
+	if(saveAEWfns || saveAEWfnsRealSpace)
+	{
+		bool hasPAW=false;
+		for(auto sp:e->iInfo.species)
+		{
+			hasPAW |= sp->isPAW();
+			if(!sp->atpos.empty() && !sp->isPAW())
+				die("All-electron Wannier wavefunctions require PAW datasets for every species.\n");
+		}
+		if(!hasPAW) die("All-electron Wannier wavefunctions require PAW XML species.\n");
+	}
+	bool needsAEGrid=saveAEWfns || saveAEWfnsRealSpace;
+	for(auto sp:e->iInfo.species)
+		needsAEGrid |= sp->isPAW() && (saveRP || zH || zVfilename.length());
+	if(needsAEGrid)
+		for(auto sp:e->iInfo.species) if(!sp->atpos.empty() && !sp->isPAW())
+			die("All-electron Wannier outputs require PAW datasets for every species.\n");
+	if(needsAEGrid && e->dump.pawReconstructionCutoff && e->dump.pawReconstructionCutoff<e->cntrl.Ecut)
+		die("paw-reconstruction-cutoff must be at least elec-cutoff.\n");
 	for(auto sp: e->iInfo.species) if(sp->isPAW() && localizationMeasure==LM_RealSpace)
 		die("PAW Wannierization requires FiniteDifference or TruncatedDC localization; RealSpace lacks augmentation.\n");
 	if(koopmans)

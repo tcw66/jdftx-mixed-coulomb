@@ -198,6 +198,11 @@ private:
 	std::map<vector3<int>,matrix> iCellMap; //cell map for wannier output accounting for xExpect
 	std::vector<matrix> DblochMesh; //gradient matix elements in Bloch basis
 	void saveMLWF_C(int iSpin); //Wavefunctions
+	void saveMLWF_AE(int iSpin); //!< Reconstructed AE Wannier supercell orbitals
+	void saveMLWF_PAWMetadata(int iSpin) const;
+	double pawCutoff() const;
+	void initPAWCommonBasis(GridInfo&, Basis&) const;
+	ColumnBundle getAEWfns(const ColumnBundle&, const ColumnBundleTransform::BasisWrapper&) const;
 	void saveMLWF_H(int iSpin, const matrix& phase); //Hamiltonian
 	void saveMLWF_KI(int iSpin, const matrix& phase); //screened second-order Koopmans Hamiltonian
 	void saveMLWF_KI_densities(int iSpin); //periodic orbital densities for cross-grid matching

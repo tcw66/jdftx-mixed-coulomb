@@ -31,29 +31,76 @@ kpoint-folding 2 2 2
         return log
     run(exe, "scf", common + f"""electronic-scf nIterations 40 energyDiffThreshold 1e-10 eigDiffThreshold 1e-8
  dump-name {work}/scf.$VAR
- dump End State ElecDensity Vscloc BandEigs AEWfns AEMatrices
+ dump End State ElecDensity Vscloc BandEigs AEWfns AERealSpaceWfns AEOverlap AEMomenta AEBandEigs
  paw-reconstruction-cutoff 30
  """)
     meta = json.loads((work / "scf.paw.json").read_text())
     nq, nb = meta["states"], meta["bands"]
     eigs = np.fromfile(work / "scf.paw.eigenvals").reshape(nq, nb)
     assert np.array_equal(eigs.ravel(), np.fromfile(work / "scf.eigenvals"))
-    mats = np.fromfile(work / "scf.paw.matrices", dtype=np.complex128).reshape(nq, 5, nb, nb).swapaxes(-1, -2)
-    assert np.max(abs(mats[:, 0] - np.eye(nb))) < 1e-9
-    assert np.max(abs(mats[:, 1] - np.array([np.diag(e) for e in eigs]))) < 1e-12
-    assert np.max(abs(mats - mats.conj().swapaxes(-1, -2))) < 1e-10
-    for q in range(nq):
-        gs = np.loadtxt(work / f"scf.paw.q{q}.Gvectors", dtype=int)
-        c = np.fromfile(work / f"scf.paw.q{q}.wfns", dtype=np.complex128).reshape(nb, len(gs))
-        assert np.isfinite(c).all()
-        norm = meta["volume"] * np.sum(abs(c)**2, axis=1)
-        assert np.max(abs(norm - 1)) < .03, norm
     reader_path = Path(__file__).resolve().parents[2] / "scripts" / "read_paw.py"
     spec = importlib.util.spec_from_file_location("read_paw", reader_path)
     reader = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(reader)
     exported = reader.PAWExport(work / "scf.paw")
-    assert np.array_equal(exported.matrices, mats)
+    assert np.array_equal(exported.eigenvalues, eigs)
+    assert np.max(abs(exported.overlap - np.eye(nb))) < 1e-9
+    assert np.max(abs(exported.momenta - exported.momenta.conj().swapaxes(-1, -2))) < 1e-10
+    assert not (work / "scf.paw.matrices").exists()
+    assert not list(work.glob("scf.paw.q*.wfns"))
+    assert (work / "scf.paw.wfns").stat().st_size == sum(meta["basis_sizes"]) * nb * 16
+    if len(sys.argv) > 4:
+        # The native C++ reader/writer must round-trip the new file verbatim.
+        proc = subprocess.run([str(Path(sys.argv[4]).resolve()), str(work / "scf.in"), "30",
+                               str(work / "scf.paw.wfns"), str(work / "native.wfns")],
+                              cwd=work, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              text=True, timeout=90)
+        assert proc.returncode == 0, proc.stdout[-5000:]
+        assert (work / "native.wfns").read_bytes() == (work / "scf.paw.wfns").read_bytes()
+    for q in range(nq):
+        gs, c = exported.wavefunction(q)
+        assert np.isfinite(c).all()
+        norm = meta["volume"] * np.sum(abs(c)**2, axis=1)
+        assert np.max(abs(norm - 1)) < .03, norm
+        np.testing.assert_allclose(exported.real_space_dump(q), exported.real_space(q), rtol=0, atol=1e-12)
+    # Each output works independently and does not implicitly write spectra,
+    # reciprocal coefficients, real-space orbitals, or unrelated matrices.
+    selections = {"AEWfns": ("wavefunctions", "wfns"),
+                  "AERealSpaceWfns": ("real_space_wavefunctions", None),
+                  "AEOverlap": ("overlap", "overlap"),
+                  "AEMomenta": ("momenta", "momenta"),
+                  "AEBandEigs": ("eigenvalues", "eigenvals"),
+                  "AEMatrices": (None, None)}
+    for command, (key, suffix) in selections.items():
+        # Matrix-only dumps do not depend on a valid reconstruction cutoff.
+        cutoff = 30 if command in ("AEWfns", "AERealSpaceWfns") else 4
+        run(exe, command, common + f"""initial-state {work}/scf.$VAR
+ dump-only
+ dump-name {work}/{command}.$VAR
+ dump End {command}
+ paw-reconstruction-cutoff {cutoff}
+ """)
+        separate = reader.PAWExport(work / f"{command}.paw")
+        flags = separate.outputs
+        assert flags == {k: k == key or (command == "AEMatrices" and
+                         k in ("overlap", "momenta", "eigenvalues")) for k in flags}
+        names = {p.name[len(command + ".paw."):] for p in work.glob(f"{command}.paw.*")}
+        expected = {"json"}
+        if command == "AEWfns":
+            expected |= {"wfns", "Gvectors"}
+            np.testing.assert_allclose(separate.wavefunction(1)[1], exported.wavefunction(1)[1], rtol=0, atol=2e-11)
+        elif command == "AERealSpaceWfns":
+            expected |= {f"q{q}.b{b}.rs" for q in range(nq) for b in range(nb)}
+            np.testing.assert_allclose(separate.real_space_dump(1), exported.real_space(1), rtol=0, atol=2e-11)
+        elif command == "AEMatrices":
+            expected |= {"eigenvals", "overlap", "momenta"}
+        else:
+            expected.add(suffix)
+        assert names == expected, (command, names, expected)
+        for attribute in ("overlap", "momenta", "eigenvalues"):
+            actual = getattr(separate, attribute)
+            if actual is not None:
+                np.testing.assert_allclose(actual, getattr(exported, attribute), rtol=0, atol=2e-10)
     _, coefficients = exported.wavefunction(0)
     u = exported.real_space(0)
     direct_norm = np.mean(abs(u)**2, axis=(1, 2, 3))
@@ -61,7 +108,7 @@ kpoint-folding 2 2 2
     run(exe, "high-reconstruction", common + f"""initial-state {work}/scf.$VAR
 dump-only
 dump-name {work}/high.$VAR
-dump End AEWfns AEMatrices
+dump End AEWfns AEOverlap AEMomenta AEBandEigs
 paw-reconstruction-cutoff 80
 """)
     high = reader.PAWExport(work / "high.paw")
@@ -76,7 +123,7 @@ paw-reconstruction-cutoff 80
             k = (gs + np.array(export.metadata["kpoints_reciprocal"][q])) @ reciprocal
             for axis in range(3):
                 actual = vol * (coeff.conj() * k[:, axis]) @ coeff.T
-                momentum_error = max(momentum_error, np.max(abs(actual - export.matrices[q, 2 + axis])))
+                momentum_error = max(momentum_error, np.max(abs(actual - export.momenta[q, axis])))
         return norm_error, momentum_error
     low_error, high_error = reconstruction_error(exported), reconstruction_error(high)
     assert high_error[0] < low_error[0], (low_error, high_error)

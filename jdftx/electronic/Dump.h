@@ -54,7 +54,8 @@ enum DumpVariable { DumpNone, DumpState, //None or exactly those required to res
 	DumpMomenta, DumpVelocities, DumpFermiVelocity, DumpR, DumpL, DumpQ, DumpBerry,
 	DumpSymmetries, DumpKpoints, DumpGvectors, DumpOrbitalDep, DumpXCanalysis, DumpEresolvedDensity, DumpFermiDensity,
 	DumpDWfns, DumpDn, DumpDVext, DumpDVscloc, DumpHC,
-	DumpAEWfns, DumpAEMatrices, // PAW reconstructed valence wavefunctions and physical matrix elements
+	DumpAEWfns, DumpAERealSpaceWfns, DumpAEOverlap, DumpAEMomenta, DumpAEBandEigs,
+	DumpAEMatrices, // shorthand for the three independent PAW operator dumps
 	DumpDefectReference, DumpDefectCoulomb, // clean reference and mixed-boundary diagnostics
 	DumpDelim //special value used as a delimiter during command processing
 };
@@ -92,7 +93,7 @@ public:
 	bool bandProjectionOrtho, bandProjectionNorm; //!< whether band projections use ortho-orbitals and are complex/norm-only
 	matrix3<int> Munfold; //!< transformation matrix for band structure unfolding
 private:
-	void dumpPAW(bool wavefunctions, bool matrices) const;
+	void dumpPAW(bool wavefunctions, bool realSpace, bool overlap, bool momenta, bool eigenvalues) const;
 	const Everything* e;
 	string format; //!< Filename format containing $VAR, $STAMP, $FREQ etc.
 	string stamp; //!< timestamp for current dump

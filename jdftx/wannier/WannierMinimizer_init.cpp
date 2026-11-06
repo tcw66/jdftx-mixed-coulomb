@@ -149,7 +149,7 @@ WannierMinimizer::WannierMinimizer(const Everything& e, const Wannier& wannier, 
 	}
 	
 	//Determine overall Bloch wavevector of supercell (if any)
-	if(needSuper)
+	if(needSuper || wannier.saveAEWfns || wannier.saveAEWfnsRealSpace)
 	{	qnumSuper.weight = 1.;
 		qnumSuper.spin = 0.;
 		qnumSuper.k = kMesh[0].point.k * supercell.super;

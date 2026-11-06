@@ -5,6 +5,7 @@
 #include <core/RadialFunction.h>
 #include <core/matrix.h>
 #include <core/string.h>
+#include <memory>
 class ExCorr;
 
 struct PAW
@@ -36,6 +37,8 @@ struct PAW
 	std::string fingerprint; //!< dataset identity for restart validation
 	int atomicNumber = 0, lMax = 0;
 	mutable vector3<matrix> cachedMomentum;
+	mutable std::shared_ptr<struct PAWReconstruction>
+	    reconstruction; //!< local AE radial transforms, shared across k points
 	double valence = 0., radius = 0., coreKinetic = 0., ionicSelfEnergy = 0.;
 	std::vector<matrix> rho, potential; // physical real-harmonic projector basis; one per atom
 	explicit PAW(istream &);
@@ -48,6 +51,8 @@ struct PAW
 	vector3<matrix> momentumCorrection() const;
 
   private:
+	mutable std::shared_ptr<struct PAWQuadrature>
+	    quadrature; //!< persistent GPU angular geometry and workspace
 	std::vector<vector3<>> directions;
 	std::vector<double> angularWeights;
 	std::vector<std::vector<double>> harmonics;

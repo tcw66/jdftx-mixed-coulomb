@@ -7,6 +7,41 @@
 #include <core/SphericalHarmonics.h>
 #include <stdexcept>
 
+// Reconstruction is called only for k points owned by this MPI rank. None of
+// its radial transforms may invoke MPI collectives: ranks may own different
+// numbers of k points, or no k points at all.
+struct PAWReconstruction
+{
+	double dG;
+	int nGrid;
+	std::vector<RadialFunctionG> functions;
+	PAWReconstruction(const PAW &paw, double spacing, int count)
+	    : dG(spacing), nGrid(count), functions(paw.states.size())
+	{
+		RadialFunctionR radial = paw.grid;
+		for (size_t s = 0; s < paw.states.size(); s++)
+		{
+			const auto &st = paw.states[s];
+			for (size_t r = 0; r < radial.f.size(); r++)
+				radial.f[r] = radial.r[r] <= paw.radius + 1e-8 ? st.ae[r] - st.ps[r] : 0.;
+			std::vector<double> samples(nGrid);
+			threadLaunch(
+			    +[](size_t first, size_t last, const RadialFunctionR *f, int l, double dg, double *values)
+			    {
+				    for (size_t i = first; i < last; i++)
+					    values[i] = f->transform(l, i * dg);
+			    },
+			    nGrid, &radial, st.l, dG, samples.data());
+			functions[s].init(st.l, samples, dG);
+		}
+	}
+	~PAWReconstruction()
+	{
+		for (auto &f : functions)
+			f.free();
+	}
+};
+
 void SpeciesInfo::readPAW(istream &input)
 {
 	try
@@ -154,25 +189,18 @@ ColumnBundle SpeciesInfo::pawReconstruct(const ColumnBundle &c, const Basis &tar
 	const int n = paw->channels.size();
 	matrix proj = (*getV(c)) ^ c;
 	const double dg = e->gInfo.dGradial;
-	double gmax = 0.;
-	for (size_t g = 0; g < target.nbasis; g++)
-		gmax = std::max(gmax, ((target.iGarr.data()[g] + c.qnum->k) * e->gInfo.G).length());
-	int ng = int(ceil(gmax / dg)) + 5;
+	int ng = int(ceil(target.gInfo->GmaxSphere / dg)) + 5;
+	if (!paw->reconstruction || paw->reconstruction->dG != dg || paw->reconstruction->nGrid < ng)
+		paw->reconstruction = std::make_shared<PAWReconstruction>(*paw, dg, ng);
 	ColumnBundle delta(n * atpos.size(), target.nbasis, &target, c.qnum, isGpuEnabled());
 	int channel = 0;
-	RadialFunctionR radial = paw->grid;
 	for (const auto &ch : paw->channels)
 	{
-		const auto &st = paw->states[ch.state];
-		for (size_t r = 0; r < radial.f.size(); r++)
-			radial.f[r] = radial.r[r] <= coreRadius + 1e-8 ? st.ae[r] - st.ps[r] : 0.;
-		RadialFunctionG radialG;
-		radial.transform(ch.l, dg, ng, radialG);
+		const RadialFunctionG &radialG = paw->reconstruction->functions[ch.state];
 		// Fourier (-i)^l and physical-projection i^l cancel in JDFTx conventions.
 		callPref(Vnl)(target.nbasis, n * target.nbasis, atpos.size(), ch.l, ch.m, c.qnum->k,
 		              target.iGarr.dataPref(), e->gInfo.G, atposManaged.dataPref(), radialG,
 		              delta.dataPref() + channel * target.nbasis);
-		radialG.free();
 		channel++;
 	}
 	result = (1. / e->gInfo.detR) * delta * proj;

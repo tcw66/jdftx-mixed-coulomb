@@ -198,19 +198,45 @@ its results do not establish convergence for every system in this implementation
 All-electron valence reconstruction has an independent export cutoff:
 
 ```text
-dump End BandEigs AEWfns AEMatrices
+dump End AEWfns AEBandEigs AEOverlap AEMomenta
 paw-reconstruction-cutoff 200
 ```
 
+CUDA builds evaluate the on-site angular PBE quadrature on GPU. Start with one
+MPI rank per GPU and benchmark the complete calculation. AE reconstruction
+supports unequal k-point ownership across MPI ranks. Saved `State` files can
+be exported with `initial-state` and `dump-only`, using the same band count and
+k mesh, without repeating SCF; the PAW guide gives an example.
+
 Converge this export cutoff separately when using the reconstructed Fourier
 coefficients. It controls the resolution of the exported wavefunctions;
-`elec-cutoff` controls the smooth SCF basis and density grid. `AEMatrices`
-exports the analytic PAW overlap, Hamiltonian, and canonical momentum matrices.
+`elec-cutoff` controls the smooth SCF basis and density grid. `AEWfns` writes
+a single `paw.wfns` file in native ColumnBundle layout, with matching basis
+metadata and G vectors. Use `AERealSpaceWfns` separately for real-space periodic
+orbitals. `AEOverlap` and `AEMomenta` export the analytic PAW overlap and
+canonical momentum matrices; `AEBandEigs` supplies the diagonal Hamiltonian
+eigenvalues. Each output can be requested independently. `AEMatrices` remains
+a shorthand for the three operator dumps.
 The PAW transformation preserves the valence eigenvalues. Frozen-core orbital
 eigenstates, spin/SOC, ionic forces, stress, relaxation, and DFPT are currently
 unsupported. See the [PAW guide and runnable examples](examples/paw/README.md)
 and [validation record](examples/paw/VALIDATION.md) for the complete scope,
 restart workflow, binary formats, and measured errors.
+
+PAW Wannier orbitals have separate reciprocal/real-space export options:
+
+```text
+wannier saveAEWfns yes saveAEWfnsRealSpace yes saveMomenta yes saveR yes saveRP yes
+paw-reconstruction-cutoff 200
+```
+
+Merge these options into the existing `wannier` command. The AE coefficient
+file is `mlwfCAE` with a native basis header and JSON metadata; real-space
+files are numbered `*.mlwfAE` and retain complex phases. PAW Wannier `H`, `P`,
+`R`, `RP`, and scalar-weight outputs use AE eigenvalues, analytic augmentation,
+or reconstructed AE integrals as appropriate. Converge the reconstruction
+cutoff for `RP` and scalar integrals. See the [AE Wannier example](examples/paw/04-wannier-ae.in)
+and [PAW guide](examples/paw/README.md) for layouts, scope, and restart usage.
 
 ## Wannier localization and fixed centers
 

@@ -161,6 +161,8 @@ void WannierMinimizer::saveMLWF(int iSpin)
 	//Save wannier wave functions if needed:
 	if(wannier.saveWfns || wannier.saveWfnsRealSpace)
 		saveMLWF_C(iSpin);
+	if(wannier.saveAEWfns || wannier.saveAEWfnsRealSpace)
+		saveMLWF_AE(iSpin);
 	
 	//Initialize cell map (for matrix element output):
 	//--- get wannier centers in lattice coordinates:
@@ -217,6 +219,7 @@ void WannierMinimizer::saveMLWF(int iSpin)
 	if(wannier.saveR or wannier.saveRP) saveMLWF_RP(iSpin, phase); //R and/or R*P matrix elements
 	if(wannier.zVfilename.length()) saveMLWF_Z(iSpin, phase); //z position
 	if(wannier.zH) saveMLWF_W(iSpin, phase); //Slab weights
+	for(auto sp:e.iInfo.species) if(sp->isPAW()) {saveMLWF_PAWMetadata(iSpin);break;}
 	saveMLWF_ImSigma_ee(iSpin, phase);
 	
 	//Phonon q-mesh outputs:
@@ -433,6 +436,16 @@ void WannierMinimizer::saveMLWF_RP(int iSpin, const matrix& phase)
 	assert(wannier.localizationMeasure == Wannier::LM_FiniteDifference
 		|| wannier.localizationMeasure == Wannier::LM_TruncatedDC);
 	const WannierMinimizerFD& wmin_fd = *((const WannierMinimizerFD*)this);
+	bool hasPAW=false;
+	for(auto sp:e.iInfo.species) hasPAW |= sp->isPAW();
+	GridInfo aeGrid;
+	Basis aeBasis;
+	std::unique_ptr<ColumnBundleTransform::BasisWrapper> aeWrapper;
+	if(hasPAW && wannier.saveRP)
+	{
+		initPAWCommonBasis(aeGrid,aeBasis);
+		aeWrapper.reset(new ColumnBundleTransform::BasisWrapper(aeBasis));
+	}
 	Cother.assign(e.eInfo.nStates, ColumnBundle());
 	int qInterval = std::max(1, int(round(qCount/20.))); //interval for reporting progress
 	for(int jReduced=0; jReduced<qCount; jReduced++)
@@ -453,14 +466,31 @@ void WannierMinimizer::saveMLWF_RP(int iSpin, const matrix& phase)
 					const KmeshEntry& kj = kMesh[edge.ik];
 					ColumnBundle Ci = getWfns(ki.point, iSpin) * ki.U;
 					ColumnBundle Cj = getWfns(edge.point, iSpin) * kj.U;
-					Cj.qnum = Ci.qnum; //effectively transport coefficients kj -> ki
 					//Compute Cj ^ [r,H] Ci:
 					int qi = ki.point.iReduced + qCount*iSpin;
-					matrix Cj_O_Ci = Cj ^ O(Ci);
+					matrix Cj_O_Ci;
 					vector3<matrix> Cj_rHcomm_Ci;
-					if(wannier.saveRP)
-					{	matrix Cj_H_Ci = Cj_O_Ci * (dagger(ki.U) * e.eVars.Hsub_eigs[qi] * ki.U);
-						Cj_rHcomm_Ci = e.iInfo.rHcommutator(Cj, Ci, Cj_H_Ci);
+					if(hasPAW)
+					{
+						// Keep the two physical k points: O(Ci) alone omits the
+						// finite-dk AE-minus-PS phase inside each augmentation sphere.
+						Cj_O_Ci=dagger(overlap(Ci,Cj));
+						if(wannier.saveRP)
+						{
+							ColumnBundle ai=getAEWfns(Ci,*aeWrapper),aj=getAEWfns(Cj,*aeWrapper);
+							for(int nu=0;nu<3;nu++)
+								Cj_rHcomm_Ci[nu]=e.gInfo.detR*(aj^D(ai,nu)); // i*p_AE
+						}
+					}
+					else
+					{
+						Cj.qnum=Ci.qnum;
+						Cj_O_Ci=Cj^O(Ci);
+						if(wannier.saveRP)
+						{
+							matrix Cj_H_Ci=Cj_O_Ci*(dagger(ki.U)*e.eVars.Hsub_eigs[qi]*ki.U);
+							Cj_rHcomm_Ci=e.iInfo.rHcommutator(Cj,Ci,Cj_H_Ci);
+						}
 					}
 					//Collect contributions to (i dC/dk) ^ C  and/or (i dC/dk) ^ [r,H] C
 					for(int mu=0; mu<3; mu++) //d/dk i.e. r direction
@@ -589,7 +619,37 @@ void WannierMinimizer::saveMLWF_Z(int iSpin, const matrix& phase)
 
 //Helper function for scalar field matrix elements (eg. slab and z)
 void WannierMinimizer::saveMLWF(int iSpin, const matrix& phase, const ScalarFieldArray& w, string varName, bool suppressUnbound)
-{	//Prepare scalar field for direct and augmented contributions:
+{
+	bool hasPAW=false;
+	for(auto sp:e.iInfo.species) hasPAW |= sp->isPAW();
+	if(hasPAW)
+	{
+		GridInfo grid;
+		Basis common;
+		initPAWCommonBasis(grid,common);
+		ColumnBundleTransform::BasisWrapper wrapper(common);
+		ScalarFieldArray weighted;
+		for(const ScalarField& wi:w) weighted.push_back(JdagOJ(changeGrid(wi,grid)));
+		matrix output=zeroes(nCenters*nCenters,phase.nRows());
+		int iqMine=0;
+		for(size_t ik=0;ik<kMesh.size();ik++) if(isMine_q(ik,iSpin))
+		{
+			const auto& ki=kMesh[ik];
+			ColumnBundle smooth=getWfns(ki.point,iSpin);
+			if(suppressUnbound && e.coulombParams.geometry!=CoulombParams::Periodic)
+			{
+				diagMatrix weights=e.eVars.Hsub_eigs[ki.point.iReduced+iSpin*qCount];
+				for(double& x:weights) x=.5*erfc(x/.02+1);
+				smooth=smooth*weights;
+			}
+			ColumnBundle ae=getAEWfns(smooth*ki.U,wrapper);
+			matrix sub=ae^Idag_DiagV_I(ae,weighted);
+			callPref(eblas_copy)(output.dataPref()+output.index(0,iqMine++),sub.dataPref(),sub.nData());
+		}
+		dumpWannierized(output,phase,varName,realPartOnly,iSpin);
+		return;
+	}
+	//Prepare scalar field for direct and augmented contributions:
 	ScalarFieldArray JdagOJw;
 	for(const ScalarField& wi: w)
 		JdagOJw.push_back(JdagOJ(wi));

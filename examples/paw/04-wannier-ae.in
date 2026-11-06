@@ -1,0 +1,17 @@
+include common.in
+kpoint-folding 8 8 8
+wannier-initial-state results/Si.$VAR
+wannier-dump-name results/Si-AE.$VAR
+wannier-center Gaussian 0.125 0.125 0.125 1
+wannier-center Gaussian -0.375 0.125 0.125 1
+wannier-center Gaussian 0.125 -0.375 0.125 1
+wannier-center Gaussian 0.125 0.125 -0.375 1
+wannier \
+    bStart 0 \
+    saveAEWfns yes \
+    saveAEWfnsRealSpace yes \
+    saveMomenta yes \
+    saveR yes \
+    saveRP yes
+paw-reconstruction-cutoff 200
+wannier-minimize nIterations 100 energyDiffThreshold 1e-8

@@ -29,8 +29,11 @@ along with JDFTx.  If not, see <http://www.gnu.org/licenses/>.
 #include <fluid/FluidSolver.h>
 #include <core/SphericalHarmonics.h>
 #include <core/Units.h>
+#include <core/LatticeUtils.h>
 #include <cstdio>
 #include <cmath>
+#include <map>
+#include <array>
 
 #define MIN_ION_DISTANCE 1e-10
 
@@ -705,4 +708,50 @@ matrix IonInfo::allElectronMomentum(const ColumnBundle& c, int dir) const
 	matrix p = complex(0., -e->gInfo.detR) * (c^D(c,dir));
 	for(auto sp: species) p += sp->pawMomentum(c, dir);
 	return p;
+}
+
+ColumnBundle IonInfo::allElectronWavefunctions(const ColumnBundle &c, const Basis &target) const
+{
+	bool hasPAW = false;
+	for (auto sp : species)
+	{
+		hasPAW |= sp->isPAW();
+		if (!sp->atpos.empty() && !sp->isPAW())
+			die("All-electron wavefunctions require PAW datasets for every species.\n");
+	}
+	if (!hasPAW)
+		die("All-electron wavefunctions require PAW XML species.\n");
+	assert(nrm2(target.gInfo->R - e->gInfo.R) < symmThreshold * nrm2(e->gInfo.R));
+	ColumnBundle ae(c.nCols(), target.nbasis, &target, c.qnum, isGpuEnabled());
+	ae.zero();
+	std::map<std::array<int, 3>, size_t> index;
+	for (size_t g = 0; g < target.nbasis; g++)
+	{
+		auto v = target.iGarr.data()[g];
+		index[{{v[0], v[1], v[2]}}] = g;
+	}
+	const complex *src = c.data();
+	complex *dst = ae.data();
+	for (size_t g = 0; g < c.basis->nbasis; g++)
+	{
+		auto v = c.basis->iGarr.data()[g];
+		auto entry = index.find({{v[0], v[1], v[2]}});
+		for (int b = 0; b < c.nCols(); b++)
+		{
+			complex value = src[b * c.basis->nbasis + g];
+			// Common Wannier bases include exact zero padding outside each
+			// physical G+k sphere. No nonzero smooth coefficient may be lost.
+			if (entry == index.end())
+			{
+				if (value.norm() != 0.)
+					die("PAW output basis does not contain the smooth wavefunction support.\n");
+			}
+			else
+				dst[b * target.nbasis + entry->second] = value;
+		}
+	}
+	for (auto sp : species)
+		if (!sp->atpos.empty())
+			ae += sp->pawReconstruct(c, target);
+	return ae;
 }

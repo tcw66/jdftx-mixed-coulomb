@@ -34,6 +34,8 @@ enum WannierMember
 	WM_frozenCenters,
 	WM_saveWfns,
 	WM_saveWfnsRealSpace,
+	WM_saveAEWfns,
+	WM_saveAEWfnsRealSpace,
 	WM_saveMomenta,
 	WM_saveSpin,
 	WM_saveR,
@@ -64,6 +66,8 @@ EnumStringMap<WannierMember> wannierMemberMap
 	WM_frozenCenters, "frozenCenters",
 	WM_saveWfns, "saveWfns",
 	WM_saveWfnsRealSpace, "saveWfnsRealSpace",
+	WM_saveAEWfns, "saveAEWfns",
+	WM_saveAEWfnsRealSpace, "saveAEWfnsRealSpace",
 	WM_saveMomenta, "saveMomenta",
 	WM_saveSpin, "saveSpin",
 	WM_saveR, "saveR",
@@ -168,6 +172,13 @@ struct CommandWannier : public Command
 			"\n+ saveWfnsRealSpace yes|no\n\n"
 			"   Whether to write supercell wavefunctions band-by-band in real space (can be enormous).\n"
 			"   Default: no.\n"
+			"\n+ saveAEWfns yes|no\n\n"
+			"   PAW Wannier wavefunctions can be selected independently with saveAEWfns yes\n"
+			"   (mlwfCAE and header) and saveAEWfnsRealSpace yes (complex orbital files).\n"
+			"   Both use paw-reconstruction-cutoff, default four times elec-cutoff.\n"
+			"   Smooth wavefunction outputs retain their existing meaning. Default: no.\n"
+			"\n+ saveAEWfnsRealSpace yes|no\n\n"
+			"   Write complex all-electron Wannier orbitals, one per supercell real-space file. Default: no.\n"
 			"\n+ saveMomenta yes|no\n\n"
 			"   Whether to write momentum matrix elements in the same format as Hamiltonian.\n"
 			"   The output stores i*p (real and antisymmetric in real Wannier bases).\n"
@@ -180,6 +191,7 @@ struct CommandWannier : public Command
 			"   Whether to write R matrix elements. Note that the position R here is only\n"
 			"   the short-ranged part; longer-ranged contributions from the derivative\n"
 			"   of the Wannier rotations need to be added after Wannier interpolation.\n"
+			"   With PAW, finite-k overlaps include true all-electron augmentation.\n"
 			"   Default: no.\n"
 			"\n+ saveRP yes|no\n\n"
 			"   Whether to write R*P matrix elements for calculation of angular momentum and\n"
@@ -188,6 +200,8 @@ struct CommandWannier : public Command
 			"   derivative of Wannier rotations need to be added after Wannier interpolation.\n"
 			"   The output drops a factor of (-i) to make it real when possible, i.e.\n"
 			"   it actually corresponds to R*[R,H] instead of R*P.\n"
+			"   With PAW, it stores the corresponding short-range R*i*p_AE from reconstructed orbitals.\n"
+			"   Converge paw-reconstruction-cutoff and k mesh for this output.\n"
 			"   Default: no.\n"
 			"\n+ saveZ <Vfilename> <Emag>\n\n"
 			"   If specified, output matrix elements of z for perturbative electric field in post processing.\n"
@@ -294,6 +308,12 @@ struct CommandWannier : public Command
 				case WM_saveMomenta:
 					pl.get(wannier.saveMomenta, false, boolMap, "saveMomenta", true);
 					break;
+				case WM_saveAEWfns:
+					pl.get(wannier.saveAEWfns, false, boolMap, "saveAEWfns", true);
+					break;
+				case WM_saveAEWfnsRealSpace:
+					pl.get(wannier.saveAEWfnsRealSpace, false, boolMap, "saveAEWfnsRealSpace", true);
+					break;
 				case WM_saveSpin:
 					pl.get(wannier.saveSpin, false, boolMap, "saveSpin", true);
 					if(wannier.saveSpin and not e.eInfo.isNoncollinear())
@@ -370,6 +390,8 @@ struct CommandWannier : public Command
 		logPrintf(" \\\n\tlocalizationMeasure %s", localizationMeasureMap.getString(wannier.localizationMeasure));
 		logPrintf(" \\\n\tsaveWfns %s", boolMap.getString(wannier.saveWfns));
 		logPrintf(" \\\n\tsaveWfnsRealSpace %s", boolMap.getString(wannier.saveWfnsRealSpace));
+		logPrintf(" \\\n\tsaveAEWfns %s", boolMap.getString(wannier.saveAEWfns));
+		logPrintf(" \\\n\tsaveAEWfnsRealSpace %s", boolMap.getString(wannier.saveAEWfnsRealSpace));
 		logPrintf(" \\\n\tsaveMomenta %s", boolMap.getString(wannier.saveMomenta));
 		logPrintf(" \\\n\tsaveSpin %s", boolMap.getString(wannier.saveSpin));
 		logPrintf(" \\\n\tsaveR %s", boolMap.getString(wannier.saveR));

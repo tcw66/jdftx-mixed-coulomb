@@ -128,6 +128,7 @@ public:
 	void writePAWState(const string& filename) const; //!< serialize on-site densities and Hamiltonians
 	void readPAWState(const string& filename) const; //!< read and validate fixed-H state
 	matrix allElectronMomentum(const ColumnBundle&, int direction) const; //!< canonical PAW momentum, including on-site AE correction
+	ColumnBundle allElectronWavefunctions(const ColumnBundle&, const Basis&) const; //!< PAW transform into a unit-cell output basis
 	//! Expectation value of [r_iDir,H] = D_iDir + nonlocal corrections
 	matrix rHcommutator(const ColumnBundle &Y, int iDir, const matrix& YdagHY) const; 
 

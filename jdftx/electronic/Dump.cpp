@@ -290,9 +290,13 @@ void Dump::operator()(DumpFrequency freq, int iter)
 	if(ShouldDump(Vscloc) and e->exCorr.needsKEdensity())
 		DUMP_spinCollection(eVars.Vtau, "Vtau")
 	
-	if(ShouldDump(AEWfns) || ShouldDump(AEMatrices))
-	{	if(!isCevec) die("AEWfns and AEMatrices require eigenstate wavefunctions (dump End).\n");
-		dumpPAW(ShouldDump(AEWfns), ShouldDump(AEMatrices));
+	if(ShouldDump(AEWfns) || ShouldDump(AERealSpaceWfns) || ShouldDump(AEOverlap)
+		|| ShouldDump(AEMomenta) || ShouldDump(AEBandEigs) || ShouldDump(AEMatrices))
+	{	if(!isCevec) die("All-electron dumps require eigenstate wavefunctions (dump End).\n");
+		dumpPAW(ShouldDump(AEWfns), ShouldDump(AERealSpaceWfns),
+			ShouldDump(AEOverlap) || ShouldDump(AEMatrices),
+			ShouldDump(AEMomenta) || ShouldDump(AEMatrices),
+			ShouldDump(AEBandEigs) || ShouldDump(AEMatrices));
 	}
 	if(ShouldDump(BandEigs) ||
 		(ShouldDump(State) &&
